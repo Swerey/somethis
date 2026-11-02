@@ -1,0 +1,145 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>用户主页 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区用户主页，查看TA的帖子与动态。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" id="userPage" style="flex-direction:column">
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="user">用户主页 <span class="hint" id="userMeta" style="margin:0"></span></div>
+    <div id="profileBox"><div class="empty-tip">加载中...</div></div>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="tabs">
+      <a href="javascript:void(0)" class="active" id="tabPosts" onclick="switchTab('posts')">帖子</a>
+      <a href="javascript:void(0)" id="tabVideos" onclick="switchTab('videos')">视频</a>
+    </div>
+    <div id="contentBox"><div class="empty-tip">加载中...</div></div>
+    <div style="display:flex;justify-content:center;gap:10px;margin-top:14px;flex-wrap:wrap" id="pager"></div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav('user');
+const targetId = Number(new URLSearchParams(location.search).get('id'));
+const pageSize = 10;
+let tab = 'posts';
+let page = 1;
+let total = 0;
+let profileData = null;
+
+if (!targetId) {
+  document.getElementById('userPage').innerHTML = '<div class="card" style="width:100%"><div class="empty-tip">无效的用户链接<br><br><a href="index.html"><button class="btn primary">' + getIcon('home', 14) + ' 返回首页</button></a></div></div>';
+} else {
+  const me = currentUser();
+  if (me && me.id === targetId) {
+    location.replace('profile.html');
+  } else {
+    loadProfile();
+  }
+}
+
+async function loadProfile() {
+  try {
+    profileData = await API.get('/api/users/' + targetId);
+    const u = profileData;
+    const avatarHtml = u.avatar
+      ? `<img loading="lazy" class="avatar" style="width:72px;height:72px;font-size:30px;object-fit:cover" src="${esc(u.avatar)}" alt="" onerror="this.outerHTML='<span class=\\'avatar\\' style=\\'width:72px;height:72px;font-size:30px\\'>${esc((u.nickname || '?').slice(0, 1))}</span>'">`
+      : `<span class="avatar" style="width:72px;height:72px;font-size:30px">${esc((u.nickname || '?').slice(0, 1))}</span>`;
+    document.getElementById('userMeta').textContent = '共' + (u.post_count ?? 0) + ' 帖 · ' + (u.video_count ?? 0) + ' 视频';
+    document.getElementById('profileBox').innerHTML = `
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+        ${avatarHtml}
+        <div style="flex:1;min-width:200px">
+          <div style="font-size:20px;font-weight:700">${esc(u.nickname || u.username || '')}</div>
+          <div style="font-size:12px;color:#9aa0a8;margin-top:4px">@${esc(u.username || '')} · 注册于 ${esc(String(u.created_at || '').slice(0, 10))}</div>
+          <div style="display:flex;gap:16px;margin-top:10px;font-size:13px;color:var(--fg-2);flex-wrap:wrap">
+            <span>${getIcon('credit', 14)} 信用分 <b>${u.credit_score ?? '-'}</b></span>
+            <span>${getIcon('ban', 14)} 违规 <b>${u.violation_count ?? 0}</b> 次</span>
+            <span>${getIcon('post', 14)} 帖子 <b>${u.post_count ?? 0}</b></span>
+            <span>${getIcon('video', 14)} 视频 <b>${u.video_count ?? 0}</b></span>
+            <span>${getIcon('user', 14)} 关注 <b>${u.following_count ?? 0}</b> / 粉丝 <b>${u.follower_count ?? 0}</b></span>
+          </div>
+        </div>
+        <a href="index.html"><button class="btn">${getIcon('home', 13)} 返回首页</button></a>
+      </div>`;
+    await loadList(1);
+  } catch (e) {
+    if (!e._toasted) showToast(e.message, 'error');
+    document.getElementById('userPage').innerHTML = '<div class="card" style="width:100%"><div class="empty-tip">加载失败：' + esc(e.message) + '<br><br><a href="index.html"><button class="btn primary">' + getIcon('home', 14) + ' 返回首页</button></a></div></div>';
+  }
+}
+
+function switchTab(t) {
+  tab = t;
+  page = 1;
+  document.getElementById('tabPosts').classList.toggle('active', t === 'posts');
+  document.getElementById('tabVideos').classList.toggle('active', t === 'videos');
+  loadList(1);
+}
+
+async function loadList(p) {
+  page = p;
+  const el = document.getElementById('contentBox');
+  const url = tab === 'posts'
+    ? `/api/users/${targetId}/posts?page=${p}&page_size=${pageSize}`
+    : `/api/users/${targetId}/videos?page=${p}&page_size=${pageSize}`;
+  try {
+    const res = await API.get(url);
+    total = res.total || 0;
+    const items = res.items || [];
+    if (!items.length) {
+      el.innerHTML = '<div class="empty-tip">' + (tab === 'posts' ? 'TA 还没有发布帖子' : 'TA 还没有发布视频') + '</div>';
+    } else if (tab === 'posts') {
+      el.innerHTML = items.map(it => `
+        <div class="post-card" onclick="location.href='post.html?id=${it.id}'">
+          <div class="post-head">${userLink(it.user_id, `<span class="avatar">${esc((it.nickname || '?').slice(0, 1))}</span><span style="font-size:13px;color:var(--fg-2)">${esc(it.nickname || '')}</span>`)}
+            <span class="cat-chip" style="color:${catColor(it.category)};border-color:${catColor(it.category)};background:${catColor(it.category)}1a">${getIcon('post', 12)} ${esc(it.category)}</span>
+            <span style="margin-left:auto;font-size:12px;color:var(--fg-3)">${timeAgo(it.created_at)}</span></div>
+          <div class="post-title"><a href="post.html?id=${it.id}" onclick="event.stopPropagation()">${esc(it.title)}</a></div>
+          <div class="post-excerpt">${esc((it.summary && it.summary.trim()) ? it.summary : (it.content || '').slice(0, 80))}</div>
+          <div class="post-meta"><span>${getIcon('like', 14)} ${it.like_count}</span><span>${getIcon('comment', 14)} ${it.comment_count}</span><span>${getIcon('credit', 14)} 信用 ${it.credit_score ?? '-'}</span></div>
+        </div>`).join('');
+    } else {
+      el.innerHTML = items.map(it => `
+        <div class="video-card" onclick="location.href='video.html?id=${it.id}'">
+          <div class="video-thumb"><img loading="lazy" class="cover-img" src="${videoCover(it)}" alt="" onerror="this.remove()"><span class="play-mask">${getIcon('video', 22)}</span></div>
+          <div style="flex:1;min-width:0">
+            <div class="v-title"><a href="video.html?id=${it.id}" onclick="event.stopPropagation()">${esc(it.title)}</a></div>
+            <div class="v-desc">${esc(it.description || '')}</div>
+            <div class="v-meta">${userLink(it.user_id, esc(it.nickname || ''))} · ${getIcon('video', 12)} ${it.view_count} · ${timeAgo(it.created_at)}</div>
+          </div>
+        </div>`).join('');
+    }
+    renderPager();
+  } catch (e) {
+    if (!e._toasted) showToast(e.message, 'error');
+    el.innerHTML = '<div class="empty-tip">加载失败：' + esc(e.message) + '</div>';
+  }
+}
+
+function renderPager() {
+  const pages = Math.max(1, Math.ceil(total / pageSize));
+  const box = document.getElementById('pager');
+  if (pages <= 1) { box.innerHTML = ''; return; }
+  const btns = [];
+  for (let i = 1; i <= pages && i <= 15; i++) {
+    btns.push(`<button class="btn sm ${i === page ? 'primary' : ''}" onclick="loadList(${i})">${i}</button>`);
+  }
+  box.innerHTML = btns.join(' ');
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,18 @@
+# SomeWhere 社区平台 - 弹幕违规识别服务镜像（批次四 Docker 化）
+# 构建：docker build -t somewhere-recognizer -f Dockerfile.recognizer .
+# 模型输出目录 outputs 通过 volume 挂载（镜像不打包模型权重）
+FROM python:3.11-slim
+
+WORKDIR /app/recognizer
+
+COPY recognizer/requirements.txt /app/recognizer/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY recognizer /app/recognizer
+
+ENV HF_ENDPOINT=https://hf-mirror.com \
+    TRANSFORMERS_OFFLINE=1
+
+EXPOSE 8000
+
+CMD ["uvicorn", "serve:app", "--host", "0.0.0.0", "--port", "8000"]

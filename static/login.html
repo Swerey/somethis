@@ -1,0 +1,75 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>登录 / 注册 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区登录与注册入口，使用账号密码访问社区。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body style="display:flex;align-items:center;justify-content:center;min-height:100vh">
+<div class="card" style="width:380px">
+  <div class="tabs">
+    <a href="#" id="tabLogin" class="active" onclick="switchTab('login')" data-icon="user">登录</a>
+    <a href="#" id="tabReg" onclick="switchTab('reg')" data-icon="user">注册</a>
+  </div>
+
+  <div id="formLogin">
+    <div class="form-group"><label>用户名</label><input class="form-input" id="loginUser"></div>
+    <div class="form-group"><label>密码</label><input class="form-input" id="loginPass" type="password"></div>
+    <button class="btn primary" style="width:100%" onclick="doLogin()" data-icon="user">登录</button>
+    <div class="hint" style="margin-top:12px">默认管理员：admin / admin123</div>
+  </div>
+
+  <div id="formReg" style="display:none">
+    <div class="form-group"><label>用户名（≥2 字符）</label><input class="form-input" id="regUser"></div>
+    <div class="form-group"><label>昵称（可选）</label><input class="form-input" id="regNick"></div>
+    <div class="form-group"><label>密码（≥6 位）</label><input class="form-input" id="regPass" type="password"></div>
+    <button class="btn primary" style="width:100%" onclick="doRegister()" data-icon="user">注册</button>
+  </div>
+  <div style="margin-top:14px;text-align:center"><a href="index.html" data-icon="home">返回首页</a></div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+function switchTab(t) {
+  document.getElementById('formLogin').style.display = t === 'login' ? '' : 'none';
+  document.getElementById('formReg').style.display = t === 'reg' ? '' : 'none';
+  document.getElementById('tabLogin').className = t === 'login' ? 'active' : '';
+  document.getElementById('tabReg').className = t === 'reg' ? 'active' : '';
+}
+
+async function doLogin() {
+  const username = document.getElementById('loginUser').value.trim();
+  const password = document.getElementById('loginPass').value;
+  if (!username || !password) { showToast('请输入用户名和密码'); return; }
+  try {
+    const res = await API.post('/api/auth/login', { username, password });
+    localStorage.setItem('token', res.token);
+    localStorage.setItem('user', JSON.stringify(res.user));
+    showToast('登录成功', true);
+    location.href = 'index.html';
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function doRegister() {
+  const username = document.getElementById('regUser').value.trim();
+  const nickname = document.getElementById('regNick').value.trim();
+  const password = document.getElementById('regPass').value;
+  if (!username || username.length < 2) { showToast('用户名至少 2 个字符'); return; }
+  if (!password || password.length < 6) { showToast('密码至少 6 位'); return; }
+  try {
+    const res = await API.post('/api/auth/register', { username, password, nickname });
+    localStorage.setItem('token', res.token);
+    localStorage.setItem('user', JSON.stringify(res.user));
+    showToast('注册成功，欢迎加入', 'success');
+    location.href = 'index.html';
+  } catch (e) { showToast(e.message, 'error'); }
+}
+</script>
+</body>
+</html>

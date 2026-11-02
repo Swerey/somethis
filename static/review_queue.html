@@ -1,0 +1,265 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>存疑审核队列 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区存疑审核队列（管理员专用）。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" style="flex-direction:column;max-width:1100px" id="reviewPage">
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="appeal">存疑上报队列 <span class="hot-tag" style="background:#ffffff;color:#000000">REVIEW</span> <span class="hint" id="queueMeta"></span></div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:12px;padding-bottom:12px;border-bottom:1px solid #eeeeee">
+      <div>
+        <div class="hint" style="margin:0 0 4px">状态</div>
+        <select class="form-input" id="fStatus" style="min-width:110px">
+          <option value="pending" selected>待处理</option>
+          <option value="resolved">已处理</option>
+          <option value="auto_folded">已折叠</option>
+          <option value="all">全部</option>
+        </select>
+      </div>
+      <div>
+        <div class="hint" style="margin:0 0 4px">风险等级</div>
+        <select class="form-input" id="fRisk" style="min-width:110px">
+          <option value="" selected>全部</option>
+          <option value="high">高危</option>
+          <option value="mid">中危</option>
+          <option value="low">低危</option>
+        </select>
+      </div>
+      <div>
+        <div class="hint" style="margin:0 0 4px">来源类型</div>
+        <select class="form-input" id="fSource" style="min-width:130px">
+          <option value="" selected>全部</option>
+          <option value="post">帖子</option>
+          <option value="comment">评论</option>
+          <option value="video_comment">视频评论</option>
+          <option value="danmaku">弹幕</option>
+          <option value="live">直播</option>
+        </select>
+      </div>
+      <div>
+        <div class="hint" style="margin:0 0 4px">违规类型</div>
+        <select class="form-input" id="fLabel" style="min-width:120px">
+          <option value="" selected>全部</option>
+          <option value="色情低俗">色情低俗</option>
+          <option value="敏感言论">敏感言论</option>
+          <option value="谩骂暴力">谩骂暴力</option>
+          <option value="歧视煽动">歧视煽动</option>
+          <option value="广告引流">广告引流</option>
+        </select>
+      </div>
+      <div>
+        <div class="hint" style="margin:0 0 4px">开始日期</div>
+        <input class="form-input" id="fDateFrom" type="date">
+      </div>
+      <div>
+        <div class="hint" style="margin:0 0 4px">结束日期</div>
+        <input class="form-input" id="fDateTo" type="date">
+      </div>
+      <button class="btn primary" onclick="loadQueue()" data-icon="search">查询</button>
+      <button class="btn" onclick="resetFilter()">重置</button>
+      <span style="flex:1"></span>
+      <button class="btn danger sm" onclick="batchAction('ban')" id="btnBatchBan" disabled data-icon="ban">确认违规（批量封禁）</button>
+      <button class="btn sm" style="background:#ffffff;color:#000000;border-color:#ffffff" onclick="batchAction('clear')" id="btnBatchClear" disabled data-icon="review">误判放行（批量）</button>
+    </div>
+
+    <table class="grid">
+      <thead><tr>
+        <th style="width:34px"><input type="checkbox" id="checkAll" onchange="toggleAll(this.checked)"></th>
+        <th>ID</th><th>来源</th><th>用户</th><th>内容</th><th>模型标签</th><th>风险</th><th>状态</th><th>上报时间</th><th>操作</th>
+      </tr></thead>
+      <tbody id="queueBody"><tr><td colspan="10" style="text-align:center;color:var(--fg-3)">加载中...</td></tr></tbody>
+    </table>
+  </div>
+</div>
+
+<!-- 上下文弹层 -->
+<div id="ctxModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:99;align-items:center;justify-content:center;padding:20px">
+  <div style="background:#ffffff;border:1px solid #e5e5e5;border-radius:12px;padding:18px 20px;width:min(760px,94vw);max-height:86vh;overflow:auto">
+    <div style="display:flex;align-items:center;margin-bottom:12px">
+      <div style="font-weight:700;font-size:16px">上下文详情 <span class="hint" id="ctxTitle"></span></div>
+      <span style="flex:1"></span>
+      <button class="btn sm" onclick="closeCtx()">关闭</button>
+    </div>
+    <div id="ctxBody"><div class="empty-tip">加载中...</div></div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav();
+const u = currentUser();
+if (!u || u.role !== 'admin') {
+  document.getElementById('reviewPage').innerHTML = '<div class="card" style="width:100%"><div class="empty-tip">需要管理员权限（默认账号 admin / admin123）。<br><br><a href="login.html"><button class="btn primary">' + getIcon('user', 14) + ' 去登录</button></a></div></div>';
+} else {
+  loadQueue();
+}
+
+function currentFilter() {
+  const p = new URLSearchParams({ page: 1, page_size: 50 });
+  p.set('status', document.getElementById('fStatus').value);
+  const risk = document.getElementById('fRisk').value;
+  const src = document.getElementById('fSource').value;
+  const label = document.getElementById('fLabel').value;
+  const d1 = document.getElementById('fDateFrom').value;
+  const d2 = document.getElementById('fDateTo').value;
+  if (risk) p.set('risk_level', risk);
+  if (src) p.set('source_type', src);
+  if (label) p.set('label', label);
+  if (d1) p.set('date_from', d1);
+  if (d2) p.set('date_to', d2);
+  return p.toString();
+}
+
+function resetFilter() {
+  document.getElementById('fStatus').value = 'pending';
+  document.getElementById('fRisk').value = '';
+  document.getElementById('fSource').value = '';
+  document.getElementById('fLabel').value = '';
+  document.getElementById('fDateFrom').value = '';
+  document.getElementById('fDateTo').value = '';
+  loadQueue();
+}
+
+function selectedIds() {
+  return Array.from(document.querySelectorAll('#queueBody input[type=checkbox]:checked')).map(cb => Number(cb.dataset.id));
+}
+
+function toggleAll(checked) {
+  document.querySelectorAll('#queueBody input[type=checkbox]').forEach(cb => cb.checked = checked);
+  updateBatchBtns();
+}
+
+function updateBatchBtns() {
+  const n = selectedIds().length;
+  document.getElementById('btnBatchBan').disabled = n === 0;
+  document.getElementById('btnBatchClear').disabled = n === 0;
+}
+
+async function loadQueue() {
+  const el = document.getElementById('queueBody');
+  try {
+    const res = await API.get('/api/admin/reviews?' + currentFilter());
+    document.getElementById('queueMeta').textContent = `共 ${res.total} 条${res.status === 'pending' ? '待处理' : ''}`;
+    if (!res.items.length) { el.innerHTML = '<tr><td colspan="10" style="text-align:center;color:var(--fg-3)">暂无存疑内容</td></tr>'; return; }
+    el.innerHTML = res.items.map(r => `
+      <tr data-id="${r.id}">
+        <td><input type="checkbox" data-id="${r.id}" onchange="updateBatchBtns()"></td>
+        <td>${r.id}</td>
+        <td>${srcChip(r.source_type)}</td>
+        <td>${r.user_id ? userLink(r.user_id, esc(r.nickname || r.username || '')) : esc(r.nickname || r.username || '')}<div class="hint" style="margin:0">信用 ${r.credit_score}</div></td>
+        <td style="max-width:340px;word-break:break-all">${esc(r.content)}</td>
+        <td>${esc(r.label || '-')}</td>
+        <td>${riskChip(r.risk_level)}</td>
+        <td>${r.status === 'pending' ? '<span class="chip warned">待处理</span>' : r.status === 'auto_folded' ? '<span class="chip folded">已折叠</span>' : '<span class="chip ok">已处理</span>'}</td>
+        <td>${timeAgo(r.created_at)}</td>
+        <td style="white-space:nowrap">
+          <button class="btn sm" onclick="openCtx(${r.id})">${getIcon('search', 13)} 查看上下文</button>
+          ${r.source_type === 'post' ? `<button class="btn sm" onclick="openPinModal('post', ${r.source_id || 0}, ${JSON.stringify(String(r.content || '')).slice(0, 60).replace(/</g, '&lt;')})">${getIcon('pin', 13)} 置顶轮播</button>` : ''}
+          ${r.status === 'pending' ? `
+            <button class="btn danger sm" onclick="handleReview(${r.id},'ban')">${getIcon('ban', 13)} 封禁</button>
+            <button class="btn sm" style="background:#ffffff;color:#000000;border-color:#ffffff" onclick="handleReview(${r.id},'clear')">${getIcon('review', 13)} 放行</button>` : ''}
+        </td>
+      </tr>`).join('');
+    document.getElementById('checkAll').checked = false;
+  } catch (e) {
+    el.innerHTML = `<tr><td colspan="10" style="text-align:center;color:var(--fg-3)">加载失败：${esc(e.message)}</td></tr>`;
+  }
+}
+
+function srcChip(t) {
+  if (t === 'danmaku') return '<span class="chip folded">弹幕</span>';
+  if (t === 'live') return '<span class="chip blocked">直播</span>';
+  if (t === 'video_comment') return '<span class="chip warned">视频评论</span>';
+  if (t === 'comment') return '<span class="chip warned">评论</span>';
+  if (t === 'post') return '<span class="chip">帖子</span>';
+  return esc(t || '-');
+}
+function riskChip(lv) {
+  if (lv === 'high') return '<span class="chip blocked">高危</span>';
+  if (lv === 'mid') return '<span class="chip folded">中危</span>';
+  return '<span class="chip warned">低危</span>';
+}
+
+async function handleReview(id, action) {
+  if (!confirm(action === 'ban' ? '确认该内容违规并封禁？将扣除用户信用分。' : '确认是误判并放行？将回退用户信用分。')) return;
+  try {
+    const res = await API.post('/api/admin/reviews/' + id + '/' + action, {});
+    showToast(action === 'ban' ? '已封禁该内容并扣除信用分' : '已标记误判放行，信用已回退', action === 'clear' ? 'success' : 'error');
+    loadQueue();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function batchAction(action) {
+  const ids = selectedIds();
+  if (!ids.length) { showToast('请先勾选要处置的条目', 'warning'); return; }
+  if (!confirm(action === 'ban' ? `确认对 ${ids.length} 条执行违规封禁？将批量扣除信用分。` : `确认对 ${ids.length} 条执行误判放行？将批量回退信用分。`)) return;
+  try {
+    const res = await API.post('/api/admin/reviews/batch', { review_ids: ids, action });
+    const ok = (res.results || []).filter(x => x.ok).length;
+    const fail = (res.results || []).length - ok;
+    showToast(`批量${action === 'ban' ? '封禁' : '放行'}完成：成功 ${ok} 条${fail ? '，失败 ' + fail + ' 条' : ''}`, fail ? 'warning' : 'success');
+    loadQueue();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+function closeCtx() { document.getElementById('ctxModal').style.display = 'none'; }
+
+async function openCtx(id) {
+  const modal = document.getElementById('ctxModal');
+  modal.style.display = 'flex';
+  document.getElementById('ctxBody').innerHTML = '<div class="empty-tip">加载中...</div>';
+  try {
+    const res = await API.get('/api/admin/reviews/' + id + '/context');
+    document.getElementById('ctxTitle').textContent = '#REVIEW ' + id;
+    const rv = res.review || {};
+    const ctx = (res.context && res.context.source) || null;
+    const user = res.user || {};
+    const recent = res.recent_content || [];
+    const viol = res.violations || [];
+    const matchedWords = res.matched_words || [];
+    const matchedLabel = res.matched_label || '';
+    document.getElementById('ctxBody').innerHTML = `
+      <div class="hint" style="margin:0 0 10px">来源：${srcChip(rv.source_type)} · 模型标签：${esc(rv.label || '-')} · 风险：${riskChip(rv.risk_level)} · 状态：${esc(rv.status)} · 上报：${timeAgo(rv.created_at)}</div>
+      <div style="background:var(--bg-soft);border:1px solid #ececec;border-radius:8px;padding:10px 12px;margin-bottom:12px">
+        <div class="hint" style="margin:0 0 4px">存疑原文</div>
+        <div style="word-break:break-all">${esc(rv.content)}</div>
+      </div>
+      <div style="background:var(--bg-soft);border:1px solid #ececec;border-radius:8px;padding:10px 12px;margin-bottom:12px">
+        <div class="hint" style="margin:0 0 4px">命中词（词典匹配）</div>
+        ${matchedWords.length ? `<div>${matchedWords.map(w => '<span class="chip blocked" style="margin:2px 4px 2px 0">' + esc(w) + '</span>').join('')}${matchedLabel ? '<span class="hint" style="margin:0 0 0 8px">类别：' + esc(matchedLabel) + '</span>' : ''}</div>` : '<div style="color:var(--fg-3)">未命中词典词（可能为模型判定）</div>'}
+      </div>
+      <div style="background:var(--bg-soft);border:1px solid #ececec;border-radius:8px;padding:10px 12px;margin-bottom:12px">
+        <div class="hint" style="margin:0 0 4px">来源内容（${esc(rv.source_type)} #${rv.source_id || ''}）</div>
+        ${ctx ? `<div style="word-break:break-all">${esc(String(ctx.content || ctx.title || JSON.stringify(ctx)).slice(0, 500))}</div>` : '<div style="color:var(--fg-3)">来源记录不存在或已被删除</div>'}
+      </div>
+      <div style="background:var(--bg-soft);border:1px solid #ececec;border-radius:8px;padding:10px 12px;margin-bottom:12px">
+        <div class="hint" style="margin:0 0 4px">用户信息</div>
+        <div>信用分 <b>${user.credit_score ?? '-'}</b> · 状态 ${user.status === 'banned' ? '<span class="chip blocked">已封禁</span>' : '<span class="chip ok">正常</span>'}${user.banned_until ? ' · 封禁至 ' + esc(user.banned_until) : ''}${user.banned_reason ? ' · 原因 ' + esc(user.banned_reason) : ''}</div>
+      </div>
+      <div style="background:var(--bg-soft);border:1px solid #ececec;border-radius:8px;padding:10px 12px;margin-bottom:12px">
+        <div class="hint" style="margin:0 0 4px">最近内容（10 条）</div>
+        ${recent.length ? recent.map(x => `<div style="padding:3px 0;border-bottom:1px solid #2a2a2a;word-break:break-all"><span class="chip">${esc(x.src)}</span> ${esc(String(x.content || '').slice(0, 120))} <span class="hint" style="margin:0">${timeAgo(x.created_at)}</span></div>`).join('') : '<div style="color:var(--fg-3)">无近期内容</div>'}
+      </div>
+      <div style="background:var(--bg-soft);border:1px solid #ececec;border-radius:8px;padding:10px 12px">
+        <div class="hint" style="margin:0 0 4px">历史违规（10 条）</div>
+        ${viol.length ? viol.map(v => `<div style="padding:3px 0;border-bottom:1px solid #2a2a2a;word-break:break-all"><span class="chip blocked">${esc(v.risk_level || '-')}</span> ${esc(String(v.content || '').slice(0, 120))} <span class="hint" style="margin:0">${esc(v.action || '')} · ${timeAgo(v.created_at)}</span></div>`).join('') : '<div style="color:var(--fg-3)">无历史违规</div>'}
+      </div>`;
+  } catch (e) {
+    document.getElementById('ctxBody').innerHTML = `<div class="empty-tip">加载失败：${esc(e.message)}</div>`;
+  }
+}
+</script>
+</body>
+</html>

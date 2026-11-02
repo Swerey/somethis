@@ -1,0 +1,85 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频审核 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区视频审核工作台（管理员专用）。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" style="flex-direction:column;max-width:980px" id="reviewPage">
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="review">待审核视频队列 <span class="hot-tag" style="background:#ffffff;color:#000000">PENDING</span> <span class="hint" id="queueMeta"></span></div>
+    <div id="listBox"><div class="empty-tip">加载中...</div></div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav();
+const u = currentUser();
+if (!u || u.role !== 'admin') {
+  document.getElementById('reviewPage').innerHTML = '<div class="card" style="width:100%"><div class="empty-tip">需要管理员权限（默认账号 admin / admin123）。<br><br><a href="login.html"><button class="btn primary">' + getIcon('user', 14) + ' 去登录</button></a></div></div>';
+} else {
+  loadQueue();
+}
+
+async function loadQueue() {
+  const el = document.getElementById('listBox');
+  try {
+    const res = await API.get('/api/admin/videos/review?page=1&page_size=50');
+    document.getElementById('queueMeta').textContent = `共 ${res.total} 条待审`;
+    if (!res.items.length) { el.innerHTML = '<div class="empty-tip">暂无待审核视频</div>'; return; }
+    el.innerHTML = res.items.map(v => `
+      <div class="card" style="width:100%;margin-bottom:12px" data-vid="${v.id}">
+        <div style="display:flex;gap:12px;flex-wrap:wrap">
+          <div style="flex:1;min-width:260px">
+            <div class="v-title" style="font-size:15px;font-weight:700;margin-bottom:6px">${esc(v.title)}</div>
+            <div class="hint" style="margin:0 0 6px">${esc(v.description || '')}</div>
+            <div class="hint">上传者：${v.user_id ? userLink(v.user_id, esc(v.nickname || v.username || '')) : esc(v.nickname || v.username || '')} · ${timeAgo(v.created_at)}</div>
+            <video id="pv_${v.id}" controls style="width:100%;max-height:260px;background:#000;border-radius:8px;margin-top:8px;display:none"></video>
+            <div style="display:flex;gap:10px;margin-top:10px">
+              <button class="btn primary" onclick="togglePreview(${v.id})">${getIcon('video', 13)} 预览</button>
+              <button class="btn" style="background:#ffffff;color:#000000;border-color:#ffffff" onclick="reviewVideo(${v.id},'approve')">${getIcon('review', 13)} 通过</button>
+              <button class="btn danger" onclick="reviewVideo(${v.id},'reject')">${getIcon('ban', 13)} 驳回</button>
+              <button class="btn sm" onclick="openPinModal('video', ${v.id}, ${JSON.stringify(String(v.title || '')).replace(/</g, '&lt;')})">${getIcon('pin', 13)} 置顶轮播</button>
+            </div>
+          </div>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    if (!e._toasted) showToast(e.message, 'error');
+    renderEmpty(el, '加载失败：' + esc(e.message));
+  }
+}
+
+async function togglePreview(vid) {
+  const v = document.getElementById('pv_' + vid);
+  if (v.style.display !== 'none') { v.pause(); v.style.display = 'none'; return; }
+  v.style.display = 'block';
+  try {
+    // 管理端文件接口需鉴权，用 fetch 拿 Blob 再播放
+    const r = await fetch('/api/admin/videos/' + vid + '/file', { headers: { Authorization: 'Bearer ' + (localStorage.getItem('token') || '') } });
+    if (!r.ok) { showToast('视频加载失败：' + r.status, 'error'); return; }
+    const blob = await r.blob();
+    v.src = URL.createObjectURL(blob);
+  } catch (e) { showToast('视频加载失败：' + e.message, 'error'); }
+}
+
+async function reviewVideo(vid, action) {
+  try {
+    const res = await API.post('/api/admin/videos/' + vid + '/review', { action });
+    showToast((action === 'approve' ? '已通过：' : '已驳回：') + res.video.title, action === 'approve' ? 'success' : 'error');
+    loadQueue();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+</script>
+</body>
+</html>

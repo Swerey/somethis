@@ -1,0 +1,171 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>审核工作台 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区审核工作台（管理员专用）。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" style="flex-direction:column" id="adminPage">
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="settings">平台健康度</div>
+    <div class="health-grid" id="healthGrid" style="grid-template-columns:repeat(6,1fr)">
+      <div class="health-item"><div class="num red" id="hToday">-</div><div class="lbl">今日拦截</div></div>
+      <div class="health-item"><div class="num" id="hTotal">-</div><div class="lbl">累计拦截</div></div>
+      <div class="health-item"><div class="num red" id="hHigh">-</div><div class="lbl">高危记录</div></div>
+      <div class="health-item"><div class="num orange" id="hRate">-</div><div class="lbl">今日拦截率</div></div>
+      <div class="health-item"><div class="num" id="hLat">-</div><div class="lbl">平均延迟 ms</div></div>
+      <div class="health-item"><div class="num green" id="hContent">-</div><div class="lbl">今日内容量</div></div>
+    </div>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="settings">引擎健康面板 <span class="hot-tag" style="background:#000000;border:1px solid #ffffff">ENGINE</span></div>
+    <div class="health-grid" style="grid-template-columns:repeat(4,1fr)">
+      <div class="health-item"><div class="num" id="engStatus">-</div><div class="lbl">整体状态</div></div>
+      <div class="health-item"><div class="num" id="engModel">-</div><div class="lbl">模型服务</div></div>
+      <div class="health-item"><div class="num" id="engDict">-</div><div class="lbl">词典</div></div>
+      <div class="health-item"><div class="num" id="engDb">-</div><div class="lbl">数据库</div></div>
+      <div class="health-item"><div class="num" id="engLat">-</div><div class="lbl">平均延迟 ms</div></div>
+      <div class="health-item"><div class="num" id="engSamples">-</div><div class="lbl">延迟采样数</div></div>
+      <div class="health-item"><div class="num red" id="engBlocked">-</div><div class="lbl">今日拦截</div></div>
+      <div class="health-item"><div class="num orange" id="engFolded">-</div><div class="lbl">今日折叠</div></div>
+      <div class="health-item"><div class="num" id="engPending">-</div><div class="lbl">待处理</div></div>
+      <div class="health-item"><div class="num green" id="engRate">-</div><div class="lbl">批量成功率</div></div>
+    </div>
+    <div id="engDegrade" class="empty-tip" style="margin-top:8px" hidden>识别服务离线，仅词典可用（降级模式）</div>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="ban">违规类型分布（六分类）</div>
+    <div class="chart-box"><canvas id="barChart"></canvas></div>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="notification">近 7 天拦截趋势</div>
+    <div class="chart-box"><canvas id="lineChart"></canvas></div>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="review">待复核违规队列</div>
+    <table class="grid">
+      <thead><tr><th>ID</th><th>用户</th><th>内容</th><th>类型</th><th>类别</th><th>风险</th><th>处置</th><th>时间</th></tr></thead>
+      <tbody id="violTable"></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="live">直播间监控 <span class="hot-tag" style="background:#000000;border:1px solid #ffffff">LIVE</span></div>
+    <div id="liveBox"><div class="empty-tip">加载中...</div></div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav();
+const u = currentUser();
+if (!u || u.role !== 'admin') {
+  document.getElementById('adminPage').innerHTML = '<div class="card" style="width:100%"><div class="empty-tip">需要管理员权限（默认账号 admin / admin123）。<br><br><a href="login.html"><button class="btn primary">' + getIcon('user', 14) + ' 去登录</button></a></div></div>';
+} else {
+  loadAdmin();
+}
+
+async function loadAdmin() {
+  try {
+    const [stats, viol, live, eng] = await Promise.all([
+      API.get('/api/admin/stats'),
+      API.get('/api/admin/violations?page=1&page_size=30'),
+      API.get('/api/admin/live/rooms'),
+      API.get('/api/admin/engine/health'),
+    ]);
+    const s = stats;
+    renderEngine(eng);
+    document.getElementById('hToday').textContent = s.today_violations ?? 0;
+    document.getElementById('hTotal').textContent = s.total_violations ?? 0;
+    document.getElementById('hHigh').textContent = s.high_risk_count ?? 0;
+    document.getElementById('hRate').textContent = (s.block_rate ?? 0) + '%';
+    document.getElementById('hLat').textContent = s.avg_latency_ms == null ? '-' : s.avg_latency_ms;
+    document.getElementById('hContent').textContent = s.today_content_total ?? 0;
+
+    const labels = (s.label_distribution || []).map(x => x.label);
+    const counts = (s.label_distribution || []).map(x => x.cnt);
+    new Chart(document.getElementById('barChart'), {
+      type: 'bar',
+      data: { labels, datasets: [{ label: '违规数量', data: counts, backgroundColor: '#888888', borderColor: '#bbbbbb', borderWidth: 1 }] },
+      options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { color: '#999999' } }, x: { ticks: { color: '#999999' } } } },
+    });
+
+    const trend = (s.trend || []).map(x => x.day);
+    const trendCnt = (s.trend || []).map(x => x.cnt);
+    new Chart(document.getElementById('lineChart'), {
+      type: 'line',
+      data: { labels: trend, datasets: [{ label: '拦截量', data: trendCnt, borderColor: '#ffffff', backgroundColor: 'rgba(255,255,255,.12)', fill: true, tension: .3 }] },
+      options: { plugins: { legend: { display: false } }, scales: { y: { beginAtZero: true, ticks: { color: '#999999' } }, x: { ticks: { color: '#999999' } } } },
+    });
+
+    const rows = (viol.items || []).map(v => `<tr>
+      <td>${v.id}</td><td>${v.user_id ? userLink(v.user_id, esc(v.nickname || v.username || '')) : esc(v.nickname || v.username || '')}（信用 ${v.credit_score}）</td>
+      <td style="max-width:320px;word-break:break-all">${esc(v.content)}</td>
+      <td>${esc(v.source_type)}</td><td>${esc(v.label || '-')}</td>
+      <td>${v.risk_level === 'high' ? '<span class="chip blocked">高危</span>' : v.risk_level === 'mid' ? '<span class="chip folded">中危</span>' : '<span class="chip warned">低危</span>'}</td>
+      <td>${esc(v.action)}</td><td>${timeAgo(v.created_at)}</td></tr>`).join('');
+    document.getElementById('violTable').innerHTML = rows || '<tr><td colspan="8" style="text-align:center;color:var(--fg-3)">暂无违规记录</td></tr>';
+
+    const liveBox = document.getElementById('liveBox');
+    if (!(live.items || []).length) {
+      renderEmpty(liveBox, '暂无直播中房间');
+    } else {
+      liveBox.innerHTML = (live.items || []).map(r => `
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 0;border-bottom:1px solid #eeeeee">
+          <span style="font-weight:700">${esc(r.title)}</span>
+          <span class="chip blocked">LIVE</span>
+          <span class="hint" style="margin:0">主播：${r.user_id ? userLink(r.user_id, esc(r.nickname || r.username || '')) : esc(r.nickname || r.username || '')} · 👁 ${r.viewer_count}</span>
+          <button class="btn danger sm" onclick="closeLive(${r.id})">${getIcon('ban', 13)} 强制下播</button>
+          <div class="hint" style="width:100%;margin:4px 0 0">最近弹幕：${(r.messages || []).slice(0, 5).map(m => (m.status === 'banned' ? '【已封禁】' : '') + esc(m.content)).join(' | ') || '暂无弹幕'}</div>
+        </div>`).join('');
+    }
+  } catch (e) {
+    showToast(e.message, 'error');
+  }
+}
+
+function renderEngine(eng) {
+  if (!eng) return;
+  const online = !!(eng.online ?? eng.model_online);
+  const st = document.getElementById('engStatus');
+  st.textContent = online ? '在线' : '离线降级';
+  st.style.background = online ? '#1d4d1d' : '#8a5a00';
+  st.style.borderColor = online ? '#3fae3f' : '#cc8800';
+  const stChip = (ok) => ok ? '<span style="color:#3fae3f;font-weight:700">在线</span>' : '<span style="color:#cc8800;font-weight:700">离线</span>';
+  document.getElementById('engModel').innerHTML = stChip(!!eng.model_online);
+  document.getElementById('engDict').innerHTML = (eng.dictionary_online ? '<span style="color:#3fae3f;font-weight:700">在线</span>' : '<span style="color:#cc8800;font-weight:700">离线</span>') + (eng.dictionary_count != null ? `<span class="hint" style="margin:0">${eng.dictionary_count} 词</span>` : '');
+  document.getElementById('engDb').innerHTML = stChip(!!eng.database_online);
+  document.getElementById('engLat').textContent = eng.avg_latency_ms == null ? '-' : eng.avg_latency_ms;
+  document.getElementById('engSamples').textContent = eng.model_latencies_sampled ?? 0;
+  document.getElementById('engBlocked').textContent = eng.today_blocked ?? 0;
+  document.getElementById('engFolded').textContent = eng.today_folded ?? 0;
+  document.getElementById('engPending').textContent = eng.today_pending ?? 0;
+  document.getElementById('engRate').textContent = eng.batch_success_rate == null ? '-' : eng.batch_success_rate + '%';
+  document.getElementById('engDegrade').hidden = online;
+}
+
+async function closeLive(rid) {
+  if (!confirm('确认强制关闭该直播间？观众将被断开连接。')) return;
+  try {
+    await API.post('/api/admin/live/rooms/' + rid + '/close', {});
+    showToast('已强制下播', 'success');
+    loadAdmin();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+</script>
+</body>
+</html>

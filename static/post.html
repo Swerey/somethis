@@ -1,0 +1,143 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>帖子详情 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区帖子详情页，查看内容、评论与互动。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" style="flex-direction:column">
+  <div class="card" style="width:100%" id="postCard"><div class="empty-tip">加载中...</div></div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title">全部评论 <span class="hot-tag" style="background:#ffffff;color:#000000">评论审核</span> <span class="hint" id="cmtMeta" style="margin:0"></span></div>
+    <div id="commentList"><div class="empty-tip">暂无评论</div></div>
+    <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+      <input class="form-input" id="cmtInput" placeholder="友善发言，违规评论将被折叠拦截" style="flex:1;min-width:200px">
+      <button class="btn primary" onclick="sendComment()">发表评论</button>
+    </div>
+    <div class="hint">高危违规评论（敏感言论、色情低俗）将被拦截不显示；中危（辱骂暴力、歧视煽动）折叠显示并扣信用分</div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav();
+const postId = Number(new URLSearchParams(location.search).get('id'));
+let commentPage = 1;
+const commentPageSize = 10;
+let commentTotal = 0;
+let authorId = 0;
+
+async function loadPost(page = 1) {
+  const res = await API.get(`/api/posts/${postId}?page=${page}&page_size=${commentPageSize}`);
+  const p = res.post;
+  authorId = p.user_id;
+  commentTotal = res.total || 0;
+  commentPage = res.page || 1;
+
+  const bannedNote = p.status === 'banned' ? `<div class="folded-line">该内容因违规已被封禁 <button class="btn sm" onclick="openAppeal('posts', ${p.id})">${getIcon('appeal', 13)} 申诉</button></div>`
+    : p.status === 'folded' ? `<div class="folded-line">该内容因违规已折叠<button class="btn sm" onclick="openAppeal('posts', ${p.id})">${getIcon('appeal', 13)} 申诉</button></div>`
+    : p.status === 'warned' ? '<span class="chip warned">低危提示</span>' : '';
+  document.getElementById('postCard').innerHTML = `
+    <div class="post-head" style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+      ${userLink(p.user_id, `<span class="avatar">${esc((p.nickname || '?').slice(0, 1))}</span><div><div style="font-weight:600">${esc(p.nickname || '')}</div><div style="font-size:12px;color:var(--fg-3)">${timeAgo(p.created_at)} · ${esc(p.category)}</div></div>`)}
+      <div style="margin-left:auto;display:flex;gap:8px">
+        ${isLogin() ? `<button class="btn sm" id="followBtn" onclick="followAuthor()">${getIcon('user', 13)} 关注</button>` : ''}
+      </div>
+    </div>
+    <h1 style="font-size:22px;margin-bottom:12px">${esc(p.title)}</h1>
+    <div class="post-summary">${(p.summary && p.summary.trim()) ? esc(p.summary) : '<span class="post-summary-empty">作者暂时没有留下简介</span>'}</div>
+    <div style="font-size:14px;line-height:1.9;color:var(--fg-2);white-space:pre-wrap">${esc(p.content)}</div>
+    ${bannedNote}
+    <div style="display:flex;gap:16px;margin-top:14px;font-size:13px;color:var(--fg-2)">
+      <button class="btn" id="likeBtn" onclick="likePost()">${getIcon('like', 15)} 点赞 ${p.like_count}</button>
+      <span>${getIcon('comment', 15)} ${p.comment_count} 条评论</span>
+    </div>`;
+  document.getElementById('cmtMeta').textContent = `共${commentTotal} 条`;
+  if (page === 1) {
+    renderComments(res.comments || []);
+    setupInfiniteScroll({ container: document.getElementById('commentList'), hasMore: () => commentPage * commentPageSize < commentTotal, loadMore: async () => {
+      const next = await API.get(`/api/posts/${postId}?page=${commentPage + 1}&page_size=${commentPageSize}`);
+      commentPage = next.page || (commentPage + 1);
+      commentTotal = next.total || commentTotal;
+      const added = appendComments(next.comments || []);
+      if (added.length) document.getElementById('commentList').innerHTML += added.map(commentHtml).join('');
+    }});
+  }
+}
+
+function commentHtml(c) {
+  let body = `<div class="c-body ${c.status}">${esc(c.content)}</div>`;
+  if (c.status === 'folded' || c.status === 'banned') body = `<div class="folded-line">该评论因违规已${c.status === 'banned' ? '封禁' : '折叠'} ${esc(c.content)} <button class="btn sm" onclick="openAppeal('comments', ${c.id})">${getIcon('appeal', 13)} 申诉</button></div>`;
+  if (c.status === 'warned') body += `<div class="hint">低危提示：疑似违规内容</div>`;
+  return `<div class="comment">
+    <div class="c-head">${userLink(c.user_id, `<span class="avatar">${esc((c.nickname || '?').slice(0, 1))}</span><span class="c-name">${esc(c.nickname || '')}</span>`)}<span class="c-time">${timeAgo(c.created_at)}</span>
+    ${c.status === 'folded' ? '<span class="chip folded">折叠</span>' : ''}
+    ${c.status === 'banned' ? '<span class="chip blocked">封禁</span>' : ''}
+    ${c.status === 'warned' ? '<span class="chip warned">提示</span>' : ''}</div>
+    ${body}
+  </div>`;
+}
+
+function renderComments(comments) {
+  const el = document.getElementById('commentList');
+  const all = el._all || [];
+  comments.forEach(c => { if (!all.some(x => x.id === c.id)) all.push(c); });
+  el._all = all;
+  if (!all.length) { renderEmpty(el, '暂无评论'); return; }
+  el.innerHTML = all.map(commentHtml).join('');
+}
+
+function appendComments(comments) {
+  const el = document.getElementById('commentList');
+  const all = el._all || [];
+  const added = [];
+  comments.forEach(c => { if (!all.some(x => x.id === c.id)) { all.push(c); added.push(c); } });
+  el._all = all;
+  return added;
+}
+
+async function sendComment() {
+  const content = document.getElementById('cmtInput').value.trim();
+  if (!content) return;
+  if (!isLogin()) { showToast('请先登录', 'warning'); location.href = 'login.html'; return; }
+  try {
+    const res = await API.post(`/api/posts/${postId}/comments`, { content });
+    document.getElementById('cmtInput').value = '';
+    if (res.audit.status === 'blocked') { showToast('评论已被拦截：' + res.audit.message, 'error'); }
+    else {
+      showToast(res.audit.message, res.audit.status === 'visible' ? 'success' : 'warning');
+      loadPost(1);
+    }
+  } catch (e) { if (!e._toasted) showToast(e.message, 'error'); }
+}
+
+async function likePost() {
+  if (!isLogin()) { showToast('请先登录', 'warning'); location.href = 'login.html'; return; }
+  try {
+    const res = await API.post(`/api/posts/${postId}/like`, {});
+    document.getElementById('likeBtn').textContent = `${getIcon('like', 15)} 点赞 ${res.like_count}`;
+  } catch (e) { if (!e._toasted) showToast(e.message, 'error'); }
+}
+
+async function followAuthor() {
+  if (!isLogin()) { showToast('请先登录', 'warning'); location.href = 'login.html'; return; }
+  try {
+    const res = await API.post(`/api/posts/user/${authorId}/follow`, {});
+    document.getElementById('followBtn').textContent = res.following ? '已关注' : '关注';
+  } catch (e) { if (!e._toasted) showToast(e.message, 'error'); }
+}
+
+loadPost(1).catch(e => { if (!e._toasted) showToast(e.message, 'error'); });
+</script>
+</body>
+</html>

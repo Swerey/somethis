@@ -1,0 +1,45 @@
+# SomeWhere 社区平台 - 一键编排（批次四 Docker 化）
+# 启动：docker compose up -d --build
+# 访问：平台 http://localhost:8080 ｜ 识别服务 http://localhost:8000/docs
+services:
+  recognizer:
+    build:
+      context: .
+      dockerfile: Dockerfile.recognizer
+    container_name: somewhere-recognizer
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./recognizer/outputs:/app/recognizer/outputs   # 微调模型权重挂载
+    environment:
+      - HF_ENDPOINT=https://hf-mirror.com
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: somewhere-redis
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: somewhere-backend
+    depends_on:
+      - recognizer
+      - redis
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data                     # SQLite 数据库持久化
+      - ./static:/app/static                 # 前端静态资源（含上传的视频/封面）
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs                     # 结构化日志持久化
+    environment:
+      - AUDIT_SERVICE_URL=http://recognizer:8000
+      - PLATFORM_REDIS_ENABLED=1
+      - PLATFORM_REDIS_URL=redis://redis:6379/0
+      - BADWORD_DICT=/app/recognizer/badword_variants.json
+      - DATABASE_PATH=/app/data/hupu.db
+      - PLATFORM_LOG_DIR=/app/logs
+    restart: unless-stopped

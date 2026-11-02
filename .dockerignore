@@ -1,0 +1,23 @@
+# 构建上下文忽略（批次四 Docker 化）
+__pycache__/
+*.pyc
+*.pyo
+.git/
+.gitignore
+.idea/
+.vscode/
+.venv/
+venv/
+datasets/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+logs/
+backend/logs/
+recognizer/outputs/
+recognizer/__pycache__/
+tests/
+*.md
+Dockerfile*
+docker-compose.yml
+.dockerignore

@@ -1,0 +1,389 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频播放 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区视频播放页，支持弹幕与评论互动。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" style="flex-direction:column">
+  <div class="carousel" id="vBanner" style="display:none">
+    <div class="carousel-track" id="vBannerTrack"></div>
+    <button class="carousel-arrow left" id="vBannerPrev" aria-label="上一个">‹</button>
+    <button class="carousel-arrow right" id="vBannerNext" aria-label="下一个">›</button>
+    <div class="carousel-dots" id="vBannerDots"></div>
+  </div>
+
+  <div class="video-layout">
+    <div class="v-main">
+      <div class="card">
+        <div class="stage" id="stage">
+          <video id="player" controls autoplay muted></video>
+          <div id="dmLayer"></div>
+        </div>
+        <div class="v-info" id="vInfo"></div>
+        <div class="v-toolbar">
+          <select class="form-input" id="videoSel" style="max-width:300px"></select>
+          <button class="btn primary" onclick="playSel()" data-icon="video">播放</button>
+          <input class="form-input" id="dmInput" placeholder="发一条弹幕（违规词会被拦截演示）" style="flex:1;min-width:180px">
+          <select class="form-input" id="dmSpeed" style="max-width:104px" title="弹幕速度档位">
+            <option value="0.7">慢速</option>
+            <option value="1" selected>标准</option>
+            <option value="1.5">快速</option>
+          </select>
+          <button class="btn primary" onclick="sendDm()" data-icon="comment">发射</button>
+          <button class="btn" onclick="demoBatch()" data-icon="notification">批量违规弹幕</button>
+          <button class="btn" onclick="clearDm()" data-icon="ban">清屏</button>
+        </div>
+        <div class="hint">弹幕命中高危违规（敏感言论、色情低俗）将被拦截不显示；中危（辱骂暴力、歧视煽动）折叠显示；低危（广告引流）提示显示</div>
+      </div>
+
+      <div class="card">
+        <div class="card-title">视频评论 <span class="hot-tag" style="background:#ffffff;color:#000000">评论审核</span> <span class="hint" id="cmtCount"></span></div>
+        <div id="cmtList" style="margin-bottom:12px"><div class="empty-tip">暂无评论，来抢沙发</div></div>
+        <div style="display:flex;gap:10px">
+          <input class="form-input" id="cmtInput" placeholder="发表一条评论（违规词会被拦截）" style="flex:1;min-width:200px">
+          <button class="btn primary" onclick="sendVideoComment()" data-icon="comment">评论</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="v-side">
+      <div class="card">
+        <div class="card-title">相关推荐 <span class="hot-tag" style="background:#ffffff;color:#000000">RECOMMEND</span></div>
+        <div id="relList"><div class="empty-tip">加载推荐中...</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav();
+let currentVideoId = null;
+let cmtPage = 1;
+const cmtPageSize = 10;
+let cmtTotal = 0;
+const dmColors = ['#ffffff', '#dddddd', '#cfcfcf', '#bfbfbf', '#aaaaaa', '#eeeeee', '#999999'];
+
+let allItems = [];
+async function init() {
+  const pid = new URLSearchParams(location.search).get('id');
+  const res = await API.get('/api/videos?page=1&page_size=50');
+  const items = res.items || [];
+  allItems = items;
+  const sel = document.getElementById('videoSel');
+  sel.innerHTML = items.map(v => `<option value="${v.id}" ${String(v.id) === pid ? 'selected' : ''}>${esc(v.title)} · ${esc(v.nickname || '')}</option>`).join('');
+  sel.addEventListener('change', () => playSel());
+  // 仅展示已通过审核（approved）的视频：pending/rejected 不出现在列表与播放
+  if (pid && !items.some(v => String(v.id) === pid)) {
+    sel.innerHTML = `<option value="">${esc(pid)} 号视频不可播放</option>`;
+    document.getElementById('stage').innerHTML = '<div class="empty-tip" style="line-height:200px">该视频待审核或未通过审核，暂不可播放</div>';
+    return;
+  }
+  if (!items.length) {
+    document.getElementById('stage').innerHTML = '<div class="empty-tip" style="line-height:200px">暂无视频，请先到发帖页上传</div>';
+    return;
+  }
+  renderBanner(items.slice(0, 6));
+  const first = (pid && items.some(v => String(v.id) === pid)) ? pid : String(items[0].id);
+  renderRelList(items, Number(first));
+  await playVideo(first);
+}
+
+function playSel() {
+  const id = document.getElementById('videoSel').value;
+  if (id) playVideo(id);
+}
+
+async function playVideo(id) {
+  if (!id) return;
+  currentVideoId = Number(id);
+  const res = await API.get('/api/videos/' + id);
+  const v = res.video;
+  const player = document.getElementById('player');
+  // 切换根因修复：更新 src 后必须调用 load() 让浏览器重新加载资源，再 play() 真正起播
+  player.pause();
+  player.src = v.url || ('/api/videos/file/' + v.id);
+  player.poster = v.cover_url || videoCover(v) || '';
+  await player.load();
+  try { await player.play(); } catch (e) { /* 自动播放被浏览器拦截时静默，用户可手动点击播放 */ }
+  history.replaceState(null, '', 'video.html?id=' + v.id);
+  renderVideoInfo(v);
+  renderRelList(allItems, v.id);
+  clearDm();
+  await loadDanmaku();
+  await loadComments(1);
+}
+
+function fmtDur(s) {
+  s = Number(s || 0);
+  if (s <= 0) return '';
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
+  return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+}
+function fmtViews(n) {
+  n = Number(n || 0);
+  if (n >= 100000000) return (n / 100000000).toFixed(1) + '亿';
+  if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+  return String(n);
+}
+function fmtDate(s) {
+  if (!s) return '';
+  return String(s).slice(0, 10);
+}
+
+function renderVideoInfo(v) {
+  const el = document.getElementById('vInfo');
+  const avatarHtml = v.avatar ? `<img src="${esc(v.avatar)}" alt="">` : esc((v.nickname || '?').slice(0, 1));
+  const d = (v.description || '').trim();
+  el.innerHTML = `
+    <h1 class="v-title">${esc(v.title)}</h1>
+    <div class="v-info-row">
+      <span class="v-up">${userLink(v.user_id, `<span class="avatar">${avatarHtml}</span><span class="up-name">${esc(v.nickname || '匿名用户')}</span>`)}</span>
+      <span class="chip ok">UP主</span>
+      <span class="v-stat">${getIcon('video', 13)} ${fmtViews(v.view_count)}</span>
+      <span class="v-stat">${getIcon('comment', 13)} ${v.comment_count ?? 0}</span>
+      ${fmtDur(v.duration) ? `<span class="v-stat">${getIcon('live', 13)} ${fmtDur(v.duration)}</span>` : ''}
+      <span class="v-stat">${getIcon('credit', 13)} ${fmtDate(v.created_at)}</span>
+      <span style="flex:1"></span>
+      <button class="btn sm" onclick="reportTarget('videos', ${v.id}, '该视频涉嫌违规，请审核')">${faIcon('ban', 'nav-fa')} 举报</button>
+    </div>
+    ${d ? `<div class="v-desc" id="vDesc"><span class="v-desc-text">${esc(d)}</span> <button class="btn sm" onclick="toggleDesc()" id="vDescBtn">展开</button></div>` : ''}`;
+}
+
+function toggleDesc() {
+  const d = document.getElementById('vDesc');
+  if (!d) return;
+  d.classList.toggle('expanded');
+  const btn = document.getElementById('vDescBtn');
+  if (btn) btn.textContent = d.classList.contains('expanded') ? '收起' : '展开';
+}
+
+/* ===== 轮播 Banner（B站风格推荐横幅） ===== */
+let bannerItems = [];
+let carouselIdx = 0;
+let bannerTimer = null;
+function renderBanner(items) {
+  bannerItems = items;
+  const banner = document.getElementById('vBanner');
+  if (!items.length) { banner.style.display = 'none'; return; }
+  banner.style.display = 'block';
+  const track = document.getElementById('vBannerTrack');
+  const dots = document.getElementById('vBannerDots');
+  track.innerHTML = items.map((v, i) => {
+    const cover = v.cover_url || videoCover(v);
+    return `<a class="carousel-slide${i === 0 ? ' active' : ''}" href="javascript:void(0)" onclick="goVideo(${v.id})" title="${esc(v.title)}">
+      ${cover ? `<img class="carousel-img" src="${esc(cover)}" alt="${esc(v.title)}" loading="lazy">` : `<div class="carousel-ph"><div class="ph-glyph">${getIcon('video', 30)}</div></div>`}
+      <div class="carousel-info"><span class="carousel-tag">推荐</span><div class="carousel-title">${esc(v.title)}</div><div class="carousel-summary">${esc(v.nickname || '')} · ${fmtViews(v.view_count)}播放 · ${fmtDur(v.duration)}</div></div>
+    </a>`;
+  }).join('');
+  dots.innerHTML = items.map((v, i) => `<span class="carousel-dot${i === 0 ? ' active' : ''}" onclick="goBanner(${i})"></span>`).join('');
+  startBanner();
+}
+function goBanner(idx) {
+  carouselIdx = (idx + bannerItems.length) % bannerItems.length;
+  [...document.getElementById('vBannerTrack').children].forEach((s, i) => s.classList.toggle('active', i === carouselIdx));
+  [...document.getElementById('vBannerDots').children].forEach((d, i) => d.classList.toggle('active', i === carouselIdx));
+}
+function startBanner() {
+  stopBanner();
+  bannerTimer = setInterval(() => goBanner(carouselIdx + 1), 4500);
+}
+function stopBanner() { if (bannerTimer) { clearInterval(bannerTimer); bannerTimer = null; } }
+function goVideo(id) {
+  const idx = bannerItems.findIndex(v => v.id === Number(id));
+  if (idx >= 0) { stopBanner(); goBanner(idx); startBanner(); }
+  playVideo(id);
+}
+document.getElementById('vBannerPrev').addEventListener('click', () => { stopBanner(); goBanner(carouselIdx - 1); startBanner(); });
+document.getElementById('vBannerNext').addEventListener('click', () => { stopBanner(); goBanner(carouselIdx + 1); startBanner(); });
+
+/* ===== 右侧相关推荐（点击切换播放） ===== */
+function renderRelList(items, activeId) {
+  const el = document.getElementById('relList');
+  const rest = items.filter(v => v.id !== activeId);
+  if (!rest.length) { el.innerHTML = '<div class="empty-tip">暂无更多推荐</div>'; return; }
+  el.innerHTML = rest.map(v => {
+    const cover = v.cover_url || videoCover(v);
+    return `<div class="rel-item" data-id="${v.id}" onclick="playVideo(${v.id})">
+      <div class="rel-thumb">${cover ? `<img src="${esc(cover)}" alt="" loading="lazy">` : `<div class="rel-ph">${getIcon('video', 20)}</div>`}${fmtDur(v.duration) ? `<span class="vg-badge">${fmtDur(v.duration)}</span>` : ''}</div>
+      <div class="rel-info"><div class="rel-title">${esc(v.title)}</div><div class="rel-meta">${esc(v.nickname || '')} · ${fmtViews(v.view_count)}播放</div></div>
+    </div>`;
+  }).join('');
+}
+
+async function loadComments(page = 1) {
+  if (!currentVideoId) return;
+  const el = document.getElementById('cmtList');
+  const res = await API.get(`/api/videos/${currentVideoId}/comments?page=${page}&page_size=${cmtPageSize}`);
+  cmtTotal = res.total || 0;
+  document.getElementById('cmtCount').textContent = `共${cmtTotal} 条`;
+  if (page === 1) {
+    el._all = [];
+    el.innerHTML = '<div class="empty-tip">加载中...</div>';
+  }
+  appendComments(res.items || []);
+  renderComments();
+  if (page === 1) {
+    setupInfiniteScroll({ container: el, hasMore: () => cmtPage * cmtPageSize < cmtTotal, loadMore: async () => {
+      const next = await API.get(`/api/videos/${currentVideoId}/comments?page=${cmtPage + 1}&page_size=${cmtPageSize}`);
+      cmtPage = next.page || (cmtPage + 1);
+      cmtTotal = next.total || cmtTotal;
+      appendComments(next.items || []);
+      renderComments();
+    }});
+  }
+}
+
+function appendComments(comments) {
+  const el = document.getElementById('cmtList');
+  const all = el._all || [];
+  comments.forEach(c => { if (!all.some(x => x.id === c.id)) all.push(c); });
+  el._all = all;
+}
+
+function renderComments() {
+  const el = document.getElementById('cmtList');
+  const all = el._all || [];
+  if (!all.length) { renderEmpty(el, '暂无评论，来抢沙发'); return; }
+  el.innerHTML = all.map(c => {
+    const folded = (c.status === 'folded' || c.status === 'banned') ? `<div class="folded-line">该评论因违规已${c.status === 'banned' ? '封禁' : '折叠'} ${esc(c.content)} <button class="btn sm" onclick="openAppeal('video_comment', ${c.id})">申诉</button></div>` : '';
+    const warned = c.status === 'warned' ? '<span class="chip warned">低危提示</span>' : '';
+    return `<div class="comment">
+      <div class="c-head">${userLink(c.user_id, `<span class="avatar">${esc((c.nickname || '?').slice(0, 1))}</span><span class="c-name">${esc(c.nickname || '')}</span>`)} ${warned}
+        <span class="c-time" style="margin-left:auto">${timeAgo(c.created_at)}</span>
+        <button class="btn sm" onclick="reportTarget('video_comments', ${c.id}, '该评论涉嫌违规，请审核')">举报</button></div>
+      ${folded ? '' : `<div class="c-body ${c.status === 'folded' ? 'folded' : (c.status === 'warned' ? 'warned' : '')}">${esc(c.content)}</div>`}
+      ${folded}
+    </div>`;
+  }).join('');
+}
+
+async function sendVideoComment() {
+  if (!isLogin()) { showToast('请先登录', 'warning'); location.href = 'login.html'; return; }
+  if (!currentVideoId) { showToast('请先选择视频', 'warning'); return; }
+  const content = document.getElementById('cmtInput').value.trim();
+  if (!content) { showToast('评论内容不能为空', 'warning'); return; }
+  document.getElementById('cmtInput').value = '';
+  try {
+    const res = await API.post('/api/videos/' + currentVideoId + '/comments', { content });
+    showToast('评论成功' + (res.audit.status !== 'visible' ? '，' + res.audit.message : ''), res.audit.status === 'visible' ? 'success' : 'warning');
+    await loadComments(1);
+  } catch (e) {
+    if (!e._toasted) showToast(e.message, 'error');
+  }
+}
+
+async function loadDanmaku() {
+  if (!currentVideoId) return;
+  const res = await API.get('/api/danmaku?video_id=' + currentVideoId + '&page=1&page_size=200');
+  (res.items || []).forEach(d => spawnDm(d.content, d.status));
+}
+
+function spawnDm(text, status = 'visible', pos = null, dmId = null) {
+  const layer = document.getElementById('dmLayer');
+  const el = document.createElement('div');
+  el.className = 'danmaku ' + status;
+  el.textContent = text;
+  if (status === 'folded') el.textContent = '【已折叠】' + text;
+  if (status === 'warned') el.textContent = text + '【提示】';
+  if (dmId) {
+    el.dataset.dmId = dmId;
+    el.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      reportTarget('danmaku', dmId, '该弹幕涉嫌违规，请审核');
+    });
+  }
+  const top = pos ?? (Math.random() * 70 + 5);
+  el.style.top = top + '%';
+  el.style.color = status === 'folded' ? '#9c9c9c' : (status === 'warned' ? '#dddddd' : dmColors[Math.floor(Math.random() * dmColors.length)]);
+  layer.appendChild(el);
+  const speedFactor = Number(document.getElementById('dmSpeed')?.value || 1);
+  const speed = (90 + Math.random() * 60) * speedFactor; // px/s
+  const startX = layer.clientWidth;
+  el.style.left = startX + 'px';
+  const endX = -el.offsetWidth - 10;
+  const dur = (startX - endX) / speed;
+  el.style.transition = `left ${dur}s linear`;
+  requestAnimationFrame(() => { el.style.left = endX + 'px'; });
+  setTimeout(() => el.remove(), dur * 1000 + 500);
+}
+
+async function reportTarget(target_type, target_id, reason) {
+  if (!isLogin()) { showToast('请先登录后再举报', 'warning'); location.href = 'login.html'; return; }
+  if (!confirm('确认举报该内容吗？管理员将收到提醒并尽快处理。')) return;
+  try {
+    const res = await API.post('/api/reports', { target_type, target_id, reason });
+    showToast(res.message || '举报已提交', 'success');
+  } catch (e) { if (!e._toasted) showToast(e.message, 'error'); }
+}
+
+async function sendDm() {
+  if (!isLogin()) { showToast('请先登录后再发弹幕', 'warning'); location.href = 'login.html'; return; }
+  const content = document.getElementById('dmInput').value.trim();
+  if (!content || !currentVideoId) { if (!currentVideoId) showToast('请先选择视频', 'warning'); return; }
+  document.getElementById('dmInput').value = '';
+  try {
+    const res = await API.post('/api/danmaku', { video_id: currentVideoId, content });
+    if (res.blocked) {
+      showToast('违规弹幕已拦截：' + (res.audit.message || ''), 'error');
+      spawnBlockedNotice(content, res.audit.label);
+    } else {
+      spawnDm(content, res.danmaku.status, null, res.danmaku.id);
+      if (res.danmaku.status !== 'visible') showToast(res.audit.message, res.danmaku.status === 'warned' ? 'warning' : 'warning');
+    }
+  } catch (e) { if (!e._toasted) showToast(e.message, 'error'); }
+}
+
+function spawnBlockedNotice(text, label) {
+  const layer = document.getElementById('dmLayer');
+  const el = document.createElement('div');
+  el.className = 'danmaku';
+  el.textContent = `【已拦截 ${label || ''}】${text}`;
+  el.style.top = (Math.random() * 60 + 5) + '%';
+  el.style.color = '#ffffff';
+  el.style.border = '1px dashed #ffffff';
+  el.style.padding = '0 4px';
+  layer.appendChild(el);
+  const startX = layer.clientWidth;
+  el.style.left = startX + 'px';
+  const endX = -el.offsetWidth - 10;
+  const dur = (startX - endX) / 120;
+  el.style.transition = `left ${dur}s linear`;
+  requestAnimationFrame(() => { el.style.left = endX + 'px'; });
+  setTimeout(() => el.remove(), dur * 1000 + 500);
+}
+
+async function demoBatch() {
+  if (!currentVideoId) { showToast('请先选择视频', 'warning'); return; }
+  const samples = [
+    '主播这波操作太牛了', '哈哈哈笑了', '这个傻逼裁判怎么判的',
+    '支持国产数码品牌', 'cnm这弹幕真热', '今晚比赛真精彩',
+  ];
+  const res = await API.post('/api/danmaku/batch', { video_id: currentVideoId, texts: samples });
+  res.saved.forEach(d => spawnDm(d.content, d.status, null, d.id));
+  if (res.blocked.length) {
+    res.blocked.forEach(b => spawnBlockedNotice(b.text, b.audit.label));
+    showToast(`批量发送完成：${res.saved.length} 条正常折叠，${res.blocked.length} 条违规被拦截`, 'warning');
+  } else {
+    showToast('批量发送完成，全部通过审核', 'success');
+  }
+}
+
+function clearDm() {
+  document.getElementById('dmLayer').innerHTML = '';
+}
+
+init().catch(e => { if (!e._toasted) showToast(e.message, 'error'); });
+</script>
+</body>
+</html>

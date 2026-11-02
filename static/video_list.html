@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频推荐 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区视频推荐流：轮播 Banner + 双列视频卡片，封面/播放量/时长/UP主一目了然。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" style="flex-direction:column">
+  <div class="carousel" id="vBanner" style="display:none">
+    <div class="carousel-track" id="vBannerTrack"></div>
+    <button class="carousel-arrow left" id="vBannerPrev" aria-label="上一个">‹</button>
+    <button class="carousel-arrow right" id="vBannerNext" aria-label="下一个">›</button>
+    <div class="carousel-dots" id="vBannerDots"></div>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="video">视频推荐 <span class="hot-tag" style="background:#ffffff;color:#000000">RECOMMEND</span> <span class="hint" id="listMeta"></span></div>
+    <div class="video-grid" id="videoGrid"><div class="empty-tip" style="grid-column:1/-1">加载中...</div></div>
+    <div style="text-align:center;margin-top:8px"><button class="btn" id="loadMoreBtn" onclick="loadMore()" data-icon="plus" style="display:none">加载更多</button></div>
+    <div class="empty-tip" id="endTip" style="display:none">已经到底啦</div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav('video_list');
+let vPage = 1;
+const vPageSize = 30;
+let vTotal = 0;
+
+function fmtDur(s) {
+  s = Number(s || 0);
+  if (s <= 0) return '';
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), sec = Math.floor(s % 60);
+  return (h ? h + ':' : '') + String(m).padStart(2, '0') + ':' + String(sec).padStart(2, '0');
+}
+function fmtViews(n) {
+  n = Number(n || 0);
+  if (n >= 100000000) return (n / 100000000).toFixed(1) + '亿';
+  if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+  return String(n);
+}
+function fmtDate(s) {
+  if (!s) return '';
+  return String(s).slice(0, 10);
+}
+
+function vgCardHtml(v) {
+  const cover = v.cover_url || videoCover(v);
+  const avatarHtml = v.avatar ? `<img src="${esc(v.avatar)}" alt="">` : esc((v.nickname || '?').slice(0, 1));
+  return `<div class="vg-card" onclick="location.href='video.html?id=${v.id}'">
+    <div class="vg-cover">
+      ${cover ? `<img class="cover-img" src="${esc(cover)}" alt="${esc(v.title)}" loading="lazy">` : ''}
+      <div class="play-mask">${getIcon('video', 28)}</div>
+      ${fmtDur(v.duration) ? `<span class="vg-badge">${fmtDur(v.duration)}</span>` : ''}
+    </div>
+    <div style="padding:10px 12px 12px;display:flex;flex-direction:column;gap:6px;flex:1">
+      <div class="vg-title">${esc(v.title)}</div>
+      <div class="vg-meta">
+        <span>${getIcon('video', 12)} ${fmtViews(v.view_count)}</span>
+        <span>${fmtDur(v.duration) ? getIcon('live', 12) + ' ' + fmtDur(v.duration) : getIcon('credit', 12) + ' ' + fmtDate(v.created_at)}</span>
+      </div>
+      <div class="vg-up">${userLink(v.user_id, `<span class="avatar">${avatarHtml}</span><span>${esc(v.nickname || '匿名用户')}</span>`)}</div>
+    </div>
+  </div>`;
+}
+
+async function loadVideos(page = 1, append = false) {
+  const grid = document.getElementById('videoGrid');
+  const res = await API.get(`/api/videos?page=${page}&page_size=${vPageSize}`);
+  vTotal = res.total || 0;
+  document.getElementById('listMeta').textContent = `共 ${vTotal} 个视频`;
+  const items = res.items || [];
+  if (page === 1) {
+    grid.innerHTML = items.map(vgCardHtml).join('') || '<div class="empty-tip" style="grid-column:1/-1">暂无视频，请先到发帖页上传</div>';
+    renderBanner(items.slice(0, 6));
+  } else {
+    grid.insertAdjacentHTML('beforeend', items.map(vgCardHtml).join(''));
+  }
+  const btn = document.getElementById('loadMoreBtn');
+  const endTip = document.getElementById('endTip');
+  const hasMore = vPage * vPageSize < vTotal;
+  btn.style.display = hasMore ? 'inline-flex' : 'none';
+  endTip.style.display = (!hasMore && grid.querySelectorAll('.vg-card').length > 0) ? 'block' : 'none';
+}
+
+function loadMore() {
+  vPage += 1;
+  loadVideos(vPage, true).catch(e => { if (!e._toasted) showToast(e.message, 'error'); });
+}
+
+/* ===== 轮播 Banner（B站风格推荐横幅） ===== */
+let bannerItems = [];
+let carouselIdx = 0;
+let bannerTimer = null;
+function renderBanner(items) {
+  bannerItems = items;
+  const banner = document.getElementById('vBanner');
+  if (!items.length) { banner.style.display = 'none'; return; }
+  banner.style.display = 'block';
+  const track = document.getElementById('vBannerTrack');
+  const dots = document.getElementById('vBannerDots');
+  track.innerHTML = items.map((v, i) => {
+    const cover = v.cover_url || videoCover(v);
+    return `<a class="carousel-slide${i === 0 ? ' active' : ''}" href="video.html?id=${v.id}" title="${esc(v.title)}">
+      ${cover ? `<img class="carousel-img" src="${esc(cover)}" alt="${esc(v.title)}" loading="lazy">` : `<div class="carousel-ph"><div class="ph-glyph">${getIcon('video', 30)}</div></div>`}
+      <div class="carousel-info"><span class="carousel-tag">推荐</span><div class="carousel-title">${esc(v.title)}</div><div class="carousel-summary">${esc(v.nickname || '')} · ${fmtViews(v.view_count)}播放 · ${fmtDur(v.duration)}</div></div>
+    </a>`;
+  }).join('');
+  dots.innerHTML = items.map((v, i) => `<span class="carousel-dot${i === 0 ? ' active' : ''}" onclick="goBanner(${i})"></span>`).join('');
+  startBanner();
+}
+function goBanner(idx) {
+  carouselIdx = (idx + bannerItems.length) % bannerItems.length;
+  [...document.getElementById('vBannerTrack').children].forEach((s, i) => s.classList.toggle('active', i === carouselIdx));
+  [...document.getElementById('vBannerDots').children].forEach((d, i) => d.classList.toggle('active', i === carouselIdx));
+}
+function startBanner() {
+  stopBanner();
+  bannerTimer = setInterval(() => goBanner(carouselIdx + 1), 4500);
+}
+function stopBanner() { if (bannerTimer) { clearInterval(bannerTimer); bannerTimer = null; } }
+document.getElementById('vBannerPrev').addEventListener('click', () => { stopBanner(); goBanner(carouselIdx - 1); startBanner(); });
+document.getElementById('vBannerNext').addEventListener('click', () => { stopBanner(); goBanner(carouselIdx + 1); startBanner(); });
+
+loadVideos(1).catch(e => { if (!e._toasted) showToast(e.message, 'error'); });
+</script>
+</body>
+</html>

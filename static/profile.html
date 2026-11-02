@@ -1,0 +1,114 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>我的信用 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区个人信用档案与积分记录。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" id="profilePage" style="flex-direction:column">
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="credit">我的信用 <span class="hot-tag" style="background:#000000;color:#ffffff;border:1px solid #ffffff">M3</span></div>
+    <div class="health-grid" id="creditSummary">
+      <div class="health-item"><div class="num red" id="creditScore">--</div><div class="lbl">信用分</div></div>
+      <div class="health-item"><div class="num green" id="creditStatus">--</div><div class="lbl">账号状态</div></div>
+      <div class="health-item"><div class="num orange" id="recoverBox">--</div><div class="lbl">今日恢复余量</div></div>
+    </div>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="ban">违规记录</div>
+    <div id="violationList"><div class="empty-tip">加载中...</div></div>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="credit">信用流水（近 20 条）</div>
+    <div id="creditLogList"><div class="empty-tip">加载中...</div></div>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="appeal">我的申诉 <span class="hint" id="appealMeta" style="margin:0"></span></div>
+    <div id="appealList"><div class="empty-tip">加载中...</div></div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav('profile');
+const u = currentUser();
+if (!u) {
+  document.getElementById('profilePage').innerHTML = '<div class="card" style="width:100%"><div class="empty-tip">请先登录后查看信用信息。<br><br><a href="login.html"><button class="btn primary">' + getIcon('user', 14) + ' 去登录</button></a></div></div>';
+} else {
+  loadCredits();
+  loadAppeals();
+}
+
+async function loadCredits() {
+  try {
+    const res = await API.get('/api/me/credits');
+    document.getElementById('creditScore').textContent = res.credit_score;
+    document.getElementById('creditStatus').textContent = res.status === 'banned' ? '已封禁' : '正常';
+    document.getElementById('recoverBox').textContent = `${res.recover_remaining}/${res.recover_limit}`;
+
+    const violations = res.logs.filter(l => l.delta < 0);
+    const vl = document.getElementById('violationList');
+    if (!violations.length) {
+      vl.innerHTML = '<div class="empty-tip">暂无违规记录，请继续保持好信用。</div>';
+    } else {
+      vl.innerHTML = violations.slice(0, 10).map(l => `
+        <div class="comment">
+          <div class="c-head"><span class="chip blocked">违规</span><span class="c-time">${esc(l.created_at)}</span></div>
+          <div class="c-body">${esc(l.reason || '违规扣分')}（信用 -${Math.abs(l.delta)}）</div>
+        </div>`).join('');
+    }
+
+    const cl = document.getElementById('creditLogList');
+    if (!res.logs.length) {
+      cl.innerHTML = '<div class="empty-tip">暂无信用流水。</div>';
+    } else {
+      cl.innerHTML = `<table class="grid"><thead><tr><th>时间</th><th>原因</th><th>变化</th></tr></thead><tbody>` +
+        res.logs.slice(0, 20).map(l => `
+          <tr>
+            <td>${esc(l.created_at)}</td>
+            <td>${esc(l.reason || '-')}</td>
+            <td>${l.delta > 0 ? `<span class="chip warned">+${l.delta}</span>` : l.delta < 0 ? `<span class="chip blocked">${l.delta}</span>` : '0'}</td>
+          </tr>`).join('') + '</tbody></table>';
+    }
+  } catch (e) {
+    if (!e._toasted) showToast(e.message, 'error');
+    document.getElementById('creditLogList').innerHTML = '<div class="empty-tip">加载失败：' + esc(e.message) + '</div>';
+  }
+}
+
+async function loadAppeals() {
+  try {
+    const res = await API.get('/api/appeals/me?page=1&page_size=20');
+    document.getElementById('appealMeta').textContent = `共 ${res.total} 条`;
+    const al = document.getElementById('appealList');
+    if (!res.items.length) {
+      al.innerHTML = '<div class="empty-tip">暂无申诉记录。若内容被误折叠/封禁，可在内容旁点击「申诉」。</div>';
+      return;
+    }
+    const statusMap = { pending: '<span class="chip folded">待处理</span>', approved: '<span class="chip warned">已通过</span>', rejected: '<span class="chip blocked">已驳回</span>' };
+    al.innerHTML = res.items.map(a => `
+      <div class="comment">
+        <div class="c-head"><span>${statusMap[a.status] || esc(a.status)}</span><span class="c-time">${esc(a.created_at)}</span></div>
+        <div class="c-body">${esc(a.reason)}</div>
+        <div class="hint" style="margin:4px 0 0">来源：${esc(a.source_type)} #${a.source_id}</div>
+      </div>`).join('');
+  } catch (e) {
+    if (!e._toasted) showToast(e.message, 'error');
+    document.getElementById('appealList').innerHTML = '<div class="empty-tip">加载失败：' + esc(e.message) + '</div>';
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,566 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>直播间 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区直播间，实时互动观看。">
+
+<link rel="stylesheet" href="common.css?v=20261031">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" style="flex-direction:column;max-width:960px">
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="live">直播间 <span class="hot-tag" style="background:#000000;border:1px solid #ffffff">LIVE</span>
+      <span class="hot-tag" id="viewerBadge" style="background:#333333;border:1px solid #666666">${getIcon('live', 13)} -</span>
+      <span class="hint" id="roomMeta"></span>
+    </div>
+    <div class="stage" id="stage">
+      <video id="liveVideo" autoplay playsinline muted style="display:none;width:100%;height:100%;object-fit:contain;background:#000000"></video>
+      <div id="livePlaceholder" style="width:100%;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;background:linear-gradient(135deg,#f5f5f5,#e8e8e8);color:var(--fg-2);font-size:18px">
+        <div style="font-size:42px;margin-bottom:12px" data-icon="live" data-icon-size="42"></div>
+        <div id="placeholderText">直播进行中 · 弹幕实时审核</div>
+      </div>
+      <canvas id="videoCanvas" style="display:none;position:absolute;inset:0;width:100%;height:100%;background:#000000;z-index:2"></canvas>
+      <div id="dmLayer" style="position:absolute;inset:0;overflow:hidden;z-index:5"></div>
+    </div>
+    <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+      <input class="form-input" id="dmInput" placeholder="发一条弹幕（违规词实时拦截）" style="flex:1;min-width:180px">
+      <select class="form-input" id="dmSpeed" style="max-width:100px" title="弹幕速度档位">
+        <option value="0.7">慢速</option>
+        <option value="1" selected>标准</option>
+        <option value="1.5">快速</option>
+      </select>
+      <button class="btn primary" onclick="sendDm()" data-icon="comment">发射</button>
+    </div>
+    <div class="hint" id="wsStatus"></div>
+  </div>
+
+  <!-- 主播开播控制（摄像头 / 游戏直播） -->
+  <div class="card" style="width:100%" id="broadcastPanel" hidden>
+    <div class="card-title">开播控制 <span class="hint" id="bcHint"></span></div>
+    <div class="live-ctl">
+      <div class="live-source" id="sourceGroup">
+        <label class="source-opt">
+          <input type="radio" name="sourceType" value="camera" checked onchange="onSourceChange()">
+          <span class="source-ico" data-icon="video"></span>
+          <span><b>摄像头直播</b><small>使用本机摄像头采集画面</small></span>
+        </label>
+        <label class="source-opt">
+          <input type="radio" name="sourceType" value="game" onchange="onSourceChange()">
+          <span class="source-ico" data-icon="gamepad"></span>
+          <span><b>游戏直播</b><small>捕获屏幕 / 游戏窗口画面</small></span>
+        </label>
+      </div>
+      <div class="live-actions">
+        <button class="btn" id="btnPreview" onclick="togglePreview()">预览画面</button>
+        <button class="btn primary" id="btnStart" onclick="beginBroadcast()">开始直播</button>
+        <button class="btn danger" id="btnStop" onclick="endBroadcast()" style="display:none">结束直播</button>
+      </div>
+      <div class="hint" id="mediaStatus"></div>
+    </div>
+  </div>
+
+  <div class="card" style="width:100%" id="hostPanel" hidden>
+    <div class="card-title">在线观众（主播管理） <span class="hint" id="hostHint"></span></div>
+    <div id="hostList"><div class="empty-tip">暂无观众在线</div></div>
+  </div>
+</div>
+
+<!-- 禁言弹层 -->
+<div id="muteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.62);z-index:99;align-items:center;justify-content:center">
+  <div style="background:#ffffff;border:1px solid #e5e5e5;border-radius:12px;padding:18px 20px;width:min(420px,90vw)">
+    <div style="font-weight:700;margin-bottom:12px" data-icon="ban">禁言观众 <span id="muteTarget" style="color:var(--fg-2)"></span></div>
+    <div class="hint" style="margin:0 0 6px">禁言时长（小时），0 表示永久禁言</div>
+    <input class="form-input" id="muteHours" type="number" min="0" max="8760" value="1" style="margin-bottom:8px">
+    <div class="hint" style="margin:0 0 6px">禁言原因</div>
+    <input class="form-input" id="muteReason" maxlength="200" placeholder="如：刷屏 / 违规内容" style="margin-bottom:14px">
+    <div style="display:flex;gap:10px;justify-content:flex-end">
+      <button class="btn" onclick="closeMuteModal()">取消</button>
+      <button class="btn danger" onclick="doMute()" data-icon="ban">确认禁言</button>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261031"></script>
+<script src="api.js?v=20261031"></script>
+<script src="ui.js?v=20261031"></script>
+<script>
+renderNav('live');
+const roomId = Number(new URLSearchParams(location.search).get('id') || 0);
+const me = currentUser();
+let ws = null;
+let isHost = false;
+let retryTimer = null;
+let reconnectAttempts = 0;
+const MAX_RECONNECT = 5;
+const dmColors = ['#ffffff', '#dddddd', '#cfcfcf', '#bfbfbf', '#aaaaaa', '#eeeeee', '#999999'];
+
+// ---- 直播采集（摄像头 getUserMedia / 游戏 getDisplayMedia）----
+let broadcastStream = null;
+let previewing = false;
+let broadcasting = false;
+
+// ---- MJPEG 视频分发状态（与弹幕 WS 完全独立）----
+let wsVideo = null;
+let videoFrameTimer = null;
+let videoFrameBusy = false;
+let frameCanvas = null;
+let frameCtx = null;
+let broadcastSourceType = 'camera';
+
+function mediaSupported() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+}
+function gameCaptureSupported() {
+  return !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+}
+function setMediaStatus(text, isErr = false) {
+  const el = document.getElementById('mediaStatus');
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'hint' + (isErr ? ' danger' : ' ok');
+}
+function currentSourceType() {
+  const checked = document.querySelector('input[name="sourceType"]:checked');
+  return checked ? checked.value : 'camera';
+}
+function stopTracks(stream) {
+  if (!stream) return;
+  stream.getTracks().forEach(t => t.stop());
+}
+function showVideo(stream) {
+  const video = document.getElementById('liveVideo');
+  if (!video) return;
+  video.srcObject = stream;
+  video.style.display = 'block';
+  document.getElementById('livePlaceholder').style.display = 'none';
+}
+function hideVideo() {
+  const video = document.getElementById('liveVideo');
+  if (video) { video.srcObject = null; video.style.display = 'none'; }
+  const ph = document.getElementById('livePlaceholder');
+  if (ph) ph.style.display = 'flex';
+  document.getElementById('placeholderText').textContent = '直播进行中 · 弹幕实时审核';
+}
+
+async function acquireStream(sourceType) {
+  if (sourceType === 'game') {
+    if (!gameCaptureSupported()) throw new Error('当前浏览器不支持屏幕/窗口捕获（getDisplayMedia），请使用 Chrome / Edge 最新版，或改用摄像头直播');
+    return await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  }
+  if (!mediaSupported()) throw new Error('当前浏览器不支持摄像头采集（getUserMedia），请升级浏览器后重试');
+  return await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+}
+
+async function togglePreview() {
+  if (previewing) {
+    stopTracks(broadcastStream);
+    broadcastStream = null;
+    previewing = false;
+    stopVideoPush();
+    setMediaStatus('已停止预览');
+    document.getElementById('btnPreview').textContent = '预览画面';
+    if (!broadcasting) hideVideo();
+    return;
+  }
+  const type = currentSourceType();
+  try {
+    setMediaStatus('正在请求' + (type === 'game' ? '屏幕捕获' : '摄像头') + '权限…');
+    const stream = await acquireStream(type);
+    if (broadcastStream) stopTracks(broadcastStream);
+    broadcastStream = stream;
+    previewing = true;
+    showVideo(stream);
+    setMediaStatus('画面已就绪，确认无误后点击「开始直播」');
+    document.getElementById('btnPreview').textContent = '停止预览';
+    stream.getVideoTracks()[0] && stream.getVideoTracks()[0].addEventListener('ended', () => {
+      if (broadcasting && currentSourceType() === 'game') {
+        broadcastStream = null;
+        previewing = false;
+        broadcasting = false;
+        setMediaStatus('屏幕捕获已停止（可能被系统中断），请重新开始直播', true);
+        updateBroadcastUI();
+      }
+    });
+  } catch (e) {
+    broadcastStream = null;
+    previewing = false;
+    setMediaStatus(e.message || '获取采集画面失败，请检查权限设置', true);
+  }
+}
+
+async function beginBroadcast() {
+  if (!isHost) return;
+  if (broadcasting) { showToast('直播进行中，请勿重复开播', 'warning'); return; }
+  const type = currentSourceType();
+  if (!previewing) {
+    try {
+      setMediaStatus('正在准备采集画面…');
+      const stream = await acquireStream(type);
+      if (broadcastStream) stopTracks(broadcastStream);
+      broadcastStream = stream;
+      previewing = true;
+      showVideo(stream);
+    } catch (e) {
+      setMediaStatus(e.message || '采集失败，请重试', true);
+      return;
+    }
+  }
+  try {
+    const res = await API.post(`/api/live/rooms/${roomId}/start`, { source_type: type });
+    broadcasting = true;
+    broadcastSourceType = type;
+    setMediaStatus('直播中 · ' + (type === 'game' ? '游戏直播（屏幕/窗口捕获）' : '摄像头直播'));
+    updateBroadcastUI();
+    // 视频推流：视频 WS 已连接则立即推帧，否则重连（onopen 中自动启动推流）
+    if (wsVideo && wsVideo.readyState === WebSocket.OPEN) {
+      startVideoPush(type);
+    } else {
+      connectVideoWs();
+    }
+    if (res.room && res.room.viewer_count != null) setViewerCount(res.room.viewer_count);
+  } catch (e) {
+    if (!e._toasted) showToast(e.message, 'error');
+    setMediaStatus('开播失败：' + (e.message || '接口异常'), true);
+  }
+}
+
+async function endBroadcast() {
+  if (!isHost) return;
+  if (!confirm('确认结束直播吗？观众将无法继续观看。')) return;
+  stopVideoPush();
+  stopTracks(broadcastStream);
+  broadcastStream = null;
+  previewing = false;
+  broadcasting = false;
+  hideVideo();
+  try {
+    await API.post(`/api/live/rooms/${roomId}/stop`, {});
+    showToast('直播已结束', 'success');
+    setTimeout(() => location.href = 'live_list.html', 800);
+  } catch (e) {
+    if (!e._toasted) showToast(e.message, 'error');
+    setMediaStatus('结束直播失败：' + (e.message || '接口异常') + '，可手动关闭页面', true);
+  }
+}
+
+function onSourceChange() {
+  if (previewing || broadcasting) {
+    setMediaStatus('切换来源需先停止当前预览/直播', true);
+    document.querySelector('input[name="sourceType"]').checked = true;
+    return;
+  }
+  setMediaStatus('已选择' + (currentSourceType() === 'game' ? '游戏直播（屏幕/窗口捕获）' : '摄像头直播'));
+}
+
+function updateBroadcastUI() {
+  document.getElementById('btnPreview').style.display = broadcasting ? 'none' : 'inline-flex';
+  document.getElementById('btnStart').style.display = broadcasting ? 'none' : 'inline-flex';
+  document.getElementById('btnStop').style.display = broadcasting ? 'inline-flex' : 'none';
+  document.getElementById('bcHint').textContent = broadcasting ? '● 直播中' : '未开播';
+}
+
+function setWs(text, ok = false) {
+  const el = document.getElementById('wsStatus');
+  el.textContent = text;
+  el.className = 'hint' + (ok ? ' ok' : '');
+}
+
+function setViewerCount(n) {
+  const el = document.getElementById('viewerBadge');
+  if (el) el.innerHTML = getIcon('live', 13) + ' ' + (n == null ? '-' : n);
+}
+
+// ---- MJPEG 视频分发（主播推流 / 观众渲染，与弹幕 WS 完全独立）----
+function connectVideoWs() {
+  try { if (wsVideo) wsVideo.close(); } catch (e) {}
+  const token = localStorage.getItem('token') || '';
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  wsVideo = new WebSocket(`${proto}://${location.host}/api/live/${roomId}/video/ws?token=${encodeURIComponent(token)}`);
+  wsVideo.binaryType = 'arraybuffer';
+  wsVideo.onopen = () => {
+    // 主播已开播：连接就绪后立即发 video_start 并启动截帧推流
+    if (isHost && broadcasting) startVideoPush(broadcastSourceType);
+  };
+  wsVideo.onmessage = (ev) => {
+    if (typeof ev.data === 'string') {
+      try {
+        const d = JSON.parse(ev.data);
+        if (d.type === 'video_start') showVideoCanvas(d.source_type);
+        else if (d.type === 'video_stop') hideVideoCanvas();
+      } catch (e) {}
+      return;
+    }
+    if (ev.data instanceof ArrayBuffer) renderVideoFrame(ev.data);
+  };
+  wsVideo.onclose = () => { /* 视频通道断开不自动重连，由弹幕 WS 承担状态提示 */ };
+}
+
+function startVideoPush(sourceType) {
+  if (!wsVideo || wsVideo.readyState !== WebSocket.OPEN) return;
+  wsVideo.send(JSON.stringify({ type: 'video_start', source_type: sourceType || 'camera' }));
+  videoFrameBusy = false;
+  if (videoFrameTimer) clearInterval(videoFrameTimer);
+  videoFrameTimer = setInterval(captureAndPushFrame, 250);
+}
+
+function stopVideoPush() {
+  if (videoFrameTimer) { clearInterval(videoFrameTimer); videoFrameTimer = null; }
+  videoFrameBusy = false;
+  if (wsVideo && wsVideo.readyState === WebSocket.OPEN) {
+    try { wsVideo.send(JSON.stringify({ type: 'video_stop' })); } catch (e) {}
+  }
+}
+
+function captureAndPushFrame() {
+  if (videoFrameBusy) return; // 上一帧未发送完成则跳过，防堆积
+  const video = document.getElementById('liveVideo');
+  if (!video || !video.videoWidth) return;
+  if (!wsVideo || wsVideo.readyState !== WebSocket.OPEN) return;
+  videoFrameBusy = true;
+  const w = Math.min(video.videoWidth, 960); // 宽度 ≤960，等比缩放
+  const h = Math.round(w * video.videoHeight / video.videoWidth) || 0;
+  if (!h) { videoFrameBusy = false; return; }
+  if (!frameCanvas) { frameCanvas = document.createElement('canvas'); frameCtx = frameCanvas.getContext('2d'); }
+  if (frameCanvas.width !== w || frameCanvas.height !== h) { frameCanvas.width = w; frameCanvas.height = h; }
+  try { frameCtx.drawImage(video, 0, 0, w, h); } catch (e) { videoFrameBusy = false; return; }
+  frameCanvas.toBlob((blob) => {
+    if (!blob) { videoFrameBusy = false; return; }
+    blob.arrayBuffer().then((buf) => {
+      try { if (wsVideo && wsVideo.readyState === WebSocket.OPEN) wsVideo.send(buf); } catch (e) {}
+      videoFrameBusy = false;
+    }).catch(() => { videoFrameBusy = false; });
+  }, 'image/jpeg', 0.55);
+}
+
+function showVideoCanvas(sourceType) {
+  const c = document.getElementById('videoCanvas');
+  const ph = document.getElementById('livePlaceholder');
+  if (c) c.style.display = 'block';
+  if (ph) ph.style.display = 'none';
+  document.getElementById('placeholderText').textContent = '主播正在' + (sourceType === 'game' ? '游戏直播' : '摄像头直播') + ' · 弹幕实时审核';
+}
+
+function hideVideoCanvas() {
+  const c = document.getElementById('videoCanvas');
+  if (c) {
+    c.style.display = 'none';
+    try { c.getContext('2d').clearRect(0, 0, c.width, c.height); } catch (e) {}
+  }
+  const ph = document.getElementById('livePlaceholder');
+  if (ph) ph.style.display = 'flex';
+  document.getElementById('placeholderText').textContent = '直播进行中 · 弹幕实时审核';
+}
+
+function renderVideoFrame(buf) {
+  const c = document.getElementById('videoCanvas');
+  if (!c || c.style.display === 'none') return;
+  const stage = document.getElementById('stage');
+  if (c.width !== stage.clientWidth || c.height !== stage.clientHeight) {
+    c.width = stage.clientWidth;
+    c.height = stage.clientHeight;
+  }
+  const ctx = c.getContext('2d');
+  createImageBitmap(new Blob([buf], { type: 'image/jpeg' })).then((bmp) => {
+    const scale = Math.min(c.width / bmp.width, c.height / bmp.height);
+    const dw = bmp.width * scale, dh = bmp.height * scale;
+    ctx.drawImage(bmp, (c.width - dw) / 2, (c.height - dh) / 2, dw, dh);
+    bmp.close();
+  }).catch(() => {});
+}
+
+function connectWs() {
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
+  if (ws) { ws.onclose = null; try { ws.close(); } catch (e) {} }
+  const token = localStorage.getItem('token') || '';
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/api/live/${roomId}/ws?token=${encodeURIComponent(token)}`);
+  ws.onopen = () => {
+    reconnectAttempts = 0;
+    setWs('已连接直播间，弹幕实时同步', true);
+    // 重连成功后重拉历史：清空旧弹幕，等待服务端重新推送 history
+    const layer = document.getElementById('dmLayer');
+    if (layer) layer.innerHTML = '';
+  };
+  ws.onclose = (e) => {
+    if (e.code === 4401) { setWs('未登录或凭证失效，请重新登录'); return; }
+    if (e.code === 4404) { setWs('直播间不存在或已关闭'); return; }
+    if (e.code === 4403) { setWs('您已被主播移出直播间'); return; }
+    if (e.code === 1006) { setWs('连接被拒绝或网络异常，请确认已登录后刷新页面重试'); return; }
+    if (reconnectAttempts >= MAX_RECONNECT) { setWs('连接已断开，多次重连失败，请手动刷新页面'); return; }
+    reconnectAttempts++;
+    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 16000); // 1s/2s/4s/8s/16s 指数退避
+    setWs(`连接已断开，${delay / 1000} 秒后自动重连（第 ${reconnectAttempts}/${MAX_RECONNECT} 次）...`);
+    retryTimer = setTimeout(connectWs, delay);
+  };
+  ws.onmessage = (ev) => {
+    let data = {};
+    try { data = JSON.parse(ev.data); } catch (e) { return; }
+    if (data.type === 'history') (data.items || []).forEach(m => spawnDm(m.content, m.status, m.nickname, m.id));
+    if (data.type === 'message') spawnDm(data.message.content, data.message.status, data.message.nickname, data.message.id);
+    if (data.type === 'viewers') setViewerCount(data.count);
+    if (data.type === 'users' && isHost) renderHostList(data.items || []);
+    if (data.type === 'muted') showToast('您已被禁言，暂时无法发送弹幕' + (data.until && data.until !== '永久' ? '（至 ' + data.until + '）' : '（永久）'), 'error');
+    if (data.type === 'rate_limited') showToast(data.message || '发送太快，10 秒内最多 5 条弹幕', 'warning');
+    if (data.type === 'kicked') {
+      showToast(data.reason || '您已被主播移出直播间', 'error');
+      setTimeout(() => location.href = 'live_list.html', 1200);
+    }
+    if (data.type === 'blocked') {
+      showToast('违规弹幕已拦截：' + (data.audit.message || ''), 'error');
+      spawnDm('【已拦截 ' + (data.audit.label || '') + '】' + data.audit.message, 'blocked');
+    }
+  };
+}
+
+function spawnDm(text, status = 'visible', nickname = '', msgId = null) {
+  const layer = document.getElementById('dmLayer');
+  const el = document.createElement('div');
+  el.className = 'danmaku ' + status;
+  el.textContent = (nickname ? nickname + '：' : '') + text;
+  if (status === 'folded') el.textContent = '【已折叠】' + el.textContent;
+  if (status === 'warned') el.textContent = el.textContent + '【提示】';
+  if (msgId) {
+    el.dataset.dmId = msgId;
+    el.title = '点击举报该弹幕';
+    el.style.cursor = 'pointer';
+    el.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      reportTarget('live_messages', msgId, '该弹幕涉嫌违规，请审核');
+    });
+  }
+  el.style.top = (Math.random() * 70 + 5) + '%';
+  el.style.color = status === 'folded' ? '#9c9c9c' : (status === 'warned' ? '#dddddd' : (status === 'blocked' ? '#ffffff' : dmColors[Math.floor(Math.random() * dmColors.length)]));
+  if (status === 'blocked') { el.style.border = '1px dashed #ffffff'; el.style.padding = '0 4px'; }
+  layer.appendChild(el);
+  const speedFactor = Number(document.getElementById('dmSpeed')?.value || 1);
+  const startX = layer.clientWidth;
+  el.style.left = startX + 'px';
+  const endX = -el.offsetWidth - 10;
+  const dur = (startX - endX) / ((90 + Math.random() * 60) * speedFactor);
+  el.style.transition = `left ${dur}s linear`;
+  requestAnimationFrame(() => { el.style.left = endX + 'px'; });
+  setTimeout(() => el.remove(), dur * 1000 + 500);
+}
+
+async function reportTarget(target_type, target_id, reason) {
+  if (!isLogin()) { showToast('请先登录后再举报', 'warning'); location.href = 'login.html'; return; }
+  if (!confirm('确认举报该内容吗？管理员将收到提醒并尽快处理。')) return;
+  try {
+    const res = await API.post('/api/reports', { target_type, target_id, reason });
+    showToast(res.message || '举报已提交', 'success');
+  } catch (e) { if (!e._toasted) showToast(e.message, 'error'); }
+}
+
+function sendDm() {
+  if (!isLogin()) { showToast('请先登录后再发弹幕', 'warning'); location.href = 'login.html'; return; }
+  const content = document.getElementById('dmInput').value.trim();
+  if (!content || !ws || ws.readyState !== WebSocket.OPEN) { showToast(ws && ws.readyState !== WebSocket.OPEN ? '连接已断开，请稍候重连' : '弹幕不能为空', 'warning'); return; }
+  document.getElementById('dmInput').value = '';
+  ws.send(JSON.stringify({ type: 'message', content }));
+}
+
+function renderHostList(items) {
+  const box = document.getElementById('hostList');
+  document.getElementById('hostHint').textContent = `共 ${items.length} 人在线`;
+  if (!items.length) { box.innerHTML = '<div class="empty-tip">暂无观众在线</div>'; return; }
+  box.innerHTML = items.map(u => `
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-bottom:1px solid #eeeeee">
+      <span style="font-weight:700">${u.uid ? userLink(u.uid, esc(u.nickname || u.username || ('用户#' + u.uid))) : esc(u.nickname || u.username || ('用户#' + u.uid))}</span>
+      <span class="hint" style="margin:0">#${u.uid}</span>
+      ${u.muted ? '<span class="chip folded">禁言中</span>' : '<span class="chip ok">正常</span>'}
+      <span style="flex:1"></span>
+      ${u.muted
+        ? `<button class="btn sm" style="background:#ffffff;color:#000000;border-color:#ffffff" onclick="unmuteUser(${u.uid})">解禁</button>`
+        : `<button class="btn sm" style="background:#ffffff;color:#000000;border-color:#ffffff" onclick="openMuteModal(${u.uid},'${esc(u.nickname || u.username || '')}')">${getIcon('ban', 13)} 禁言</button>`}
+      <button class="btn danger sm" onclick="kickUser(${u.uid})">${getIcon('ban', 13)} 踢出</button>
+    </div>`).join('');
+}
+
+let muteTargetUid = 0;
+function openMuteModal(uid, name) {
+  muteTargetUid = uid;
+  document.getElementById('muteTarget').textContent = '#' + uid + ' ' + name;
+  document.getElementById('muteHours').value = 1;
+  document.getElementById('muteReason').value = '';
+  document.getElementById('muteModal').style.display = 'flex';
+}
+function closeMuteModal() {
+  document.getElementById('muteModal').style.display = 'none';
+}
+async function doMute() {
+  const hours = Math.max(0, Number(document.getElementById('muteHours').value) || 0);
+  const reason = document.getElementById('muteReason').value.trim();
+  try {
+    const res = await API.post(`/api/live/rooms/${roomId}/mute`, { user_id: muteTargetUid, duration_hours: hours, reason });
+    showToast('已禁言，期限：' + (res.muted_until || '永久'), 'success');
+    closeMuteModal();
+  } catch (e) { showToast(e.message, 'error'); }
+}
+async function unmuteUser(uid) {
+  try {
+    await API.post(`/api/live/rooms/${roomId}/unmute`, { user_id: uid });
+    showToast('已解除禁言', 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+async function kickUser(uid) {
+  if (!confirm('确认将该观众踢出直播间？')) return;
+  try {
+    const res = await API.post(`/api/live/rooms/${roomId}/kick`, { user_id: uid });
+    showToast(res.kicked ? '已将该观众移出直播间' : '该观众已不在直播间', 'success');
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function loadRoomMeta() {
+  let r = null;
+  try {
+    const res = await API.get(`/api/live/rooms/${roomId}`);
+    r = res.room;
+  } catch (e) {
+    // 详情接口失败时回退到房间列表定位（兼容旧后端）
+    try {
+      const res2 = await API.get('/api/live/rooms');
+      r = res2.items.find(x => x.id === roomId) || null;
+    } catch (e2) { /* 忽略 */ }
+  }
+  if (r) {
+    const stTag = r.stream_type === 'game' ? ' <span class="chip" style="background:#111315;color:#ffffff">游戏直播</span>'
+      : (r.stream_type === 'camera' ? ' <span class="chip" style="background:#111315;color:#ffffff">摄像头直播</span>' : '');
+    document.getElementById('roomMeta').innerHTML = `${esc(r.title)} · 主播 ${userLink(r.user_id, esc(r.nickname || r.username || ''))}${stTag}`;
+    setViewerCount(r.viewer_count);
+    if (me && me.id === r.user_id) {
+      isHost = true;
+      document.getElementById('hostPanel').hidden = false;
+      document.getElementById('broadcastPanel').hidden = false;
+      if (!mediaSupported()) setMediaStatus('当前浏览器不支持摄像头采集（getUserMedia），无法开播，请升级浏览器后重试', true);
+      updateBroadcastUI();
+    } else if (r.stream_type) {
+      document.getElementById('placeholderText').textContent = r.status === 'live'
+        ? '主播正在' + (r.stream_type === 'game' ? '游戏直播' : '摄像头直播') + ' · 弹幕实时审核'
+        : '直播已结束';
+    }
+  } else if (roomId) {
+    setWs('直播间已关闭或不存在');
+    document.getElementById('livePlaceholder').innerHTML = '<div>直播间已关闭</div>';
+    return;
+  }
+}
+
+if (!roomId) {
+  setWs('缺少直播间 ID');
+} else {
+  loadRoomMeta();
+  connectWs();
+  connectVideoWs();
+}
+window.addEventListener('pagehide', () => {
+  stopVideoPush();
+  try { if (wsVideo) { wsVideo.onclose = null; wsVideo.close(); wsVideo = null; } } catch (e) {}
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,31 @@
+# --- 敏感信息（严禁入库） ---
+data/jwt_secret.txt
+data/*.db
+data/*.log
+*.pem
+*.key
+
+# --- 模型权重与训练产物（超 GitHub 100MB 限制） ---
+recognizer/outputs/
+*.safetensors
+*.onnx
+*.pt
+*.pth
+*.ckpt
+*.bin
+
+# --- 训练数据与用户上传 ---
+datasets/
+uploads/
+
+# --- 运行时产物 ---
+temp/
+logs/
+workspace/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# --- IDE ---
+.idea/
+.vscode/

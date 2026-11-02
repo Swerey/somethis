@@ -1,0 +1,122 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>审计日志 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区审计日志查询（管理员专用）。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" style="flex-direction:column" id="auditPage">
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="settings">审计日志 <span class="hot-tag" style="background:#000000;border:1px solid #ffffff">M6 AUDIT</span></div>
+    <div class="toolbar" style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <input id="fOperator" placeholder="操作者ID" type="number" style="width:120px" value="">
+      <select id="fAction" style="width:200px">
+        <option value="">全部动作</option>
+        <option value="dict_block">词典拦截</option>
+        <option value="dict_fold">词典折叠</option>
+        <option value="dict_warn">词典警告</option>
+        <option value="model_block">模型拦截</option>
+        <option value="review_enqueue">存疑上报</option>
+        <option value="review_ban">人工确认违规</option>
+        <option value="review_clear">误判放行</option>
+        <option value="batch_ban">批量确认</option>
+        <option value="batch_clear">批量放行</option>
+        <option value="review_auto_fold">超时自动折叠</option>
+        <option value="auto_ban">自动封禁</option>
+        <option value="ban">用户封禁</option>
+        <option value="unban">用户解封</option>
+        <option value="appeal_submit">申诉提交</option>
+        <option value="appeal_review">申诉处置</option>
+        <option value="live_mute">直播禁言</option>
+        <option value="live_unmute">直播解禁</option>
+        <option value="live_kick">直播踢出</option>
+      </select>
+      <button class="btn primary" onclick="loadLogs(1)" data-icon="search">查询</button>
+      <button class="btn" onclick="resetFilter()">重置</button>
+    </div>
+    <table class="grid">
+      <thead><tr><th>ID</th><th>操作者</th><th>动作</th><th>对象类型</th><th>对象ID</th><th>详情</th><th>时间</th></tr></thead>
+      <tbody id="logTable"></tbody>
+    </table>
+    <div class="pager" style="display:flex;align-items:center;gap:10px;margin-top:10px">
+      <span id="pageInfo">共 0 条</span>
+      <button class="btn" id="prevBtn" onclick="loadLogs(page-1)">上一页</button>
+      <button class="btn" id="nextBtn" onclick="loadLogs(page+1)">下一页</button>
+    </div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav();
+const u = currentUser();
+if (!u || u.role !== 'admin') {
+  document.getElementById('auditPage').innerHTML = '<div class="card" style="width:100%"><div class="empty-tip">需要管理员权限（默认账号 admin / admin123）。<br><br><a href="login.html"><button class="btn primary">' + getIcon('user', 14) + ' 去登录</button></a></div></div>';
+} else {
+  let page = 1;
+  const ACTION_LABEL = {
+    dict_block: '词典拦截', dict_fold: '词典折叠', dict_warn: '词典警告',
+    model_block: '模型拦截', review_enqueue: '存疑上报',
+    review_ban: '人工确认违规', review_clear: '误判放行',
+    batch_ban: '批量确认', batch_clear: '批量放行',
+    review_auto_fold: '超时自动折叠', auto_ban: '自动封禁',
+    ban: '用户封禁', unban: '用户解封',
+    appeal_submit: '申诉提交', appeal_review: '申诉处置',
+    live_mute: '直播禁言', live_unmute: '直播解禁', live_kick: '直播踢出',
+  };
+  loadLogs(1);
+
+  async function loadLogs(p) {
+    page = Math.max(1, p);
+    const operator = document.getElementById('fOperator').value.trim();
+    const action = document.getElementById('fAction').value;
+    let url = '/api/admin/audit-logs?page=' + page + '&page_size=20';
+    if (operator) url += '&operator_id=' + encodeURIComponent(operator);
+    if (action) url += '&action=' + encodeURIComponent(action);
+    const body = document.getElementById('logTable');
+    body.innerHTML = '<tr><td colspan="7"><div class="empty-tip">加载中...</div></td></tr>';
+    try {
+      const data = await API.get(url);
+      if (data.items.length === 0) {
+        body.innerHTML = '<tr><td colspan="7"><div class="empty-tip">暂无审计日志</div></td></tr>';
+      } else {
+        body.innerHTML = data.items.map(function (it) {
+          const label = ACTION_LABEL[it.action] || it.action;
+          const typeLabel = {review:'存疑队列', user:'用户', appeal:'申诉', live_room:'直播间', post:'帖子', comment:'评论', danmaku:'弹幕'}[it.target_type] || it.target_type;
+          return '<tr>' +
+            '<td>' + esc(it.id) + '</td>' +
+            '<td>' + esc(it.operator_name || ('系统(' + it.operator_id + ')')) + '</td>' +
+            '<td><span class="tag" style="background:' + (label === it.action ? '#333' : '#000') + ';color:#fff;padding:1px 8px;border-radius:3px;font-size:12px">' + esc(label) + '</span></td>' +
+            '<td>' + esc(typeLabel) + '</td>' +
+            '<td>' + esc(it.target_id) + '</td>' +
+            '<td style="max-width:360px;word-break:break-all">' + esc(it.detail || '') + '</td>' +
+            '<td>' + esc(it.created_at || '') + '</td>' +
+            '</tr>';
+        }).join('');
+      }
+      document.getElementById('pageInfo').textContent = '共 ' + data.total + ' 条 · 第 ' + data.page + ' / ' + Math.max(1, Math.ceil(data.total / data.page_size)) + ' 页';
+      document.getElementById('prevBtn').disabled = data.page <= 1;
+      document.getElementById('nextBtn').disabled = data.page * data.page_size >= data.total;
+    } catch (e) {
+      body.innerHTML = '<tr><td colspan="7"><div class="empty-tip">加载失败：' + (e.message || e) + '</div></td></tr>';
+    }
+  }
+
+  function resetFilter() {
+    document.getElementById('fOperator').value = '';
+    document.getElementById('fAction').value = '';
+    loadLogs(1);
+  }
+}
+</script>
+</body>
+</html>

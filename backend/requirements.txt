@@ -1,0 +1,9 @@
+# 平台后端依赖（M6 工程化 / 批次四 Docker 化）
+fastapi>=0.110
+uvicorn>=0.29
+pydantic>=2.6
+PyJWT>=2.8
+redis>=5.0
+Pillow>=10.0
+python-multipart>=0.0.9
+（内容由AI生成，仅供参考）

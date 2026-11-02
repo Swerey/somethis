@@ -1,0 +1,667 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>屏幕选区实时弹幕识别</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 18px 20px 28px;
+    background: #0f1115; color: #e6e8ee;
+    font-family: "Microsoft YaHei", "Segoe UI", system-ui, sans-serif;
+    font-size: 14px;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; font-weight: 600; }
+  .sub { color: #8b93a7; font-size: 12px; margin-bottom: 16px; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 380px; gap: 18px; align-items: start; }
+  @media (max-width: 1080px) { .layout { grid-template-columns: 1fr; } }
+
+  .panel { background: #171a21; border: 1px solid #262b36; border-radius: 10px; padding: 14px; }
+  .panel + .panel { margin-top: 14px; }
+  .panel h2 { font-size: 13px; margin: 0 0 12px; color: #a9b2c6; font-weight: 600; letter-spacing: .3px; }
+
+  /* 捕获区 */
+  .stage { position: relative; background: #0b0d11; border: 1px solid #262b36; border-radius: 10px; overflow: hidden; min-height: 240px; }
+  #video { display: block; width: 100%; height: auto; background: #000; }
+  #overlay { position: absolute; left: 0; top: 0; cursor: crosshair; }
+  .placeholder {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #59627a; font-size: 13px; text-align: center; padding: 20px; line-height: 1.8;
+  }
+
+  /* 控件 */
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .row + .row { margin-top: 10px; }
+  button {
+    background: #2a3140; color: #e6e8ee; border: 1px solid #3a4356;
+    border-radius: 7px; padding: 7px 14px; font-size: 13px; cursor: pointer;
+    font-family: inherit; transition: background .15s, border-color .15s;
+  }
+  button:hover:not(:disabled) { background: #333c4e; border-color: #4a5568; }
+  button:disabled { opacity: .42; cursor: not-allowed; }
+  button.primary { background: #2f6fed; border-color: #3d7bf0; }
+  button.primary:hover:not(:disabled) { background: #3a7bf5; }
+  button.danger { background: #7a2a2a; border-color: #983636; }
+  button.danger:hover:not(:disabled) { background: #8d3232; }
+  button.on { background: #1f6b45; border-color: #298a58; }
+
+  label { color: #8b93a7; font-size: 12px; }
+  input[type=number], input[type=text] {
+    background: #10131a; border: 1px solid #2b3241; color: #e6e8ee;
+    border-radius: 6px; padding: 6px 8px; font-size: 13px; font-family: inherit;
+  }
+  input[type=number] { width: 74px; }
+  input[type=text] { width: 100%; }
+  input[type=range] { flex: 1; min-width: 90px; accent-color: #2f6fed; }
+
+  .stat { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
+  .stat div { background: #10131a; border: 1px solid #262b36; border-radius: 8px; padding: 9px 4px; }
+  .stat b { display: block; font-size: 19px; font-weight: 600; }
+  .stat span { font-size: 11px; color: #8b93a7; }
+  .stat .c-bad b { color: #ff6a6a; }
+  .stat .c-doubt b { color: #f0b840; }
+  .stat .c-ok b { color: #6f8ba0; }
+
+  /* 日志 */
+  #log { max-height: 420px; overflow-y: auto; margin-top: 4px; }
+  #log::-webkit-scrollbar { width: 8px; }
+  #log::-webkit-scrollbar-thumb { background: #2c3342; border-radius: 4px; }
+  .item {
+    border-left: 3px solid #39414f; background: #10131a;
+    border-radius: 0 7px 7px 0; padding: 8px 10px; margin-bottom: 7px;
+    animation: in .18s ease-out;
+  }
+  @keyframes in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
+  .item .meta { display: flex; justify-content: space-between; font-size: 11px; color: #7b8499; margin-bottom: 3px; gap: 8px; }
+  .item .txt { font-size: 13px; line-height: 1.5; word-break: break-all; }
+  .item.bad { border-left-color: #e04848; }
+  .item.bad .tag { color: #ff6a6a; }
+  .item.doubt { border-left-color: #d9a02e; }
+  .item.doubt .tag { color: #f0b840; }
+  .item.ok { border-left-color: #39414f; }
+  .item.ok .tag { color: #6f8ba0; }
+  .empty { color: #59627a; font-size: 12px; text-align: center; padding: 24px 0; }
+
+  .status { display: flex; gap: 14px; font-size: 12px; color: #8b93a7; margin-bottom: 12px; flex-wrap: wrap; }
+  .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #4a5568; margin-right: 5px; vertical-align: middle; }
+  .dot.ok { background: #35c07a; box-shadow: 0 0 6px #35c07a88; }
+  .dot.err { background: #e04848; box-shadow: 0 0 6px #e0484888; }
+  .dot.warn { background: #d9a02e; }
+  /* 顶部告警条 */
+  .alert {
+    display: none; margin: 0 0 12px; padding: 9px 12px; border-radius: 8px;
+    font-size: 12px; line-height: 1.65; cursor: pointer; word-break: break-all;
+    border: 1px solid #983636; background: #2a1618; color: #ff9a9a;
+  }
+  .alert.ok { border-color: #298a58; background: #12241c; color: #6fdc9f; }
+  .alert::after { content: "  （点击关闭）"; color: #7b8499; font-size: 11px; }
+  .hint { font-size: 11px; color: #6b7488; line-height: 1.7; margin-top: 8px; }
+  .sep { height: 1px; background: #262b36; margin: 12px 0; }
+</style>
+</head>
+<body>
+
+<h1>屏幕选区实时弹幕识别</h1>
+<div class="sub">捕获屏幕 → 框选弹幕区域 → OCR 提取文本 → BERT 违规判定（六分类）</div>
+
+<div id="alert" class="alert"></div>
+
+<div class="status">
+  <span><i class="dot" id="dot-svc"></i><span id="txt-svc">识别服务：检测中…</span></span>
+  <span><i class="dot" id="dot-ocr"></i><span id="txt-ocr">OCR 引擎：未加载</span></span>
+  <span><i class="dot" id="dot-cap"></i><span id="txt-cap">屏幕捕获：未开启</span></span>
+</div>
+
+<div class="layout">
+  <!-- 左：捕获 + 日志 -->
+  <div>
+    <div class="panel">
+      <div class="row">
+        <button id="btn-capture" class="primary">开始捕获屏幕</button>
+        <button id="btn-stop" disabled>停止捕获</button>
+        <button id="btn-reset" disabled>清除选区</button>
+      </div>
+      <div class="sep"></div>
+      <div class="stage" id="stage">
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div class="placeholder" id="placeholder">
+          点击「开始捕获屏幕」后选择要共享的屏幕 / 窗口<br>然后在画面上<strong>按住鼠标拖拽</strong>框选弹幕区域
+        </div>
+      </div>
+      <div class="hint">
+        选区坐标自动保存到浏览器本地（localStorage），下次打开自动恢复；点击画面任意处可重新框选。
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>识别结果</h2>
+      <div id="log"><div class="empty">暂无结果</div></div>
+    </div>
+  </div>
+
+  <!-- 右：控制 + 统计 -->
+  <div>
+    <div class="panel">
+      <h2>巡检控制</h2>
+      <div class="row">
+        <button id="btn-run" disabled>开始巡检</button>
+        <button id="btn-once" disabled>单次识别</button>
+        <button id="btn-clear">清空结果</button>
+      </div>
+      <div class="row">
+        <label>巡检间隔</label>
+        <input type="range" id="interval" min="0.4" max="3" step="0.1" value="1">
+        <span id="interval-val" style="min-width:42px;text-align:right;color:#a9b2c6">1.0s</span>
+      </div>
+      <div class="row">
+        <label>违规判定阈值</label>
+        <input type="range" id="minconf" min="0.3" max="0.95" step="0.05" value="0.6">
+        <span id="minconf-val" style="min-width:42px;text-align:right;color:#a9b2c6">0.60</span>
+      </div>
+      <div class="row">
+        <label>服务地址</label>
+        <input type="text" id="server" placeholder="http://127.0.0.1:8001">
+      </div>
+      <div class="sep"></div>
+      <div class="row">
+        <button id="btn-warmup">预热 OCR 引擎</button>
+        <span id="warmup-state" style="font-size:12px;color:#8b93a7">未预热</span>
+      </div>
+      <div class="hint">
+        页面打开后自动预热一次 OCR 引擎（首次加载约 2~3 秒）；若显示失败，点「预热 OCR 引擎」手动重试。<br>
+        巡检按设定间隔对选区截帧，OCR 后送 BERT 判定；去重窗口 10 秒，同一文本不重复上报。
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>统计</h2>
+      <div class="stat">
+        <div><b id="s-total">0</b><span>已识别</span></div>
+        <div class="c-bad"><b id="s-bad">0</b><span>违规</span></div>
+        <div class="c-doubt"><b id="s-doubt">0</b><span>存疑</span></div>
+      </div>
+      <div class="stat" style="margin-top:8px">
+        <div class="c-ok"><b id="s-ok">0</b><span>正常</span></div>
+        <div><b id="s-ocr">0</b><span>OCR 次数</span></div>
+        <div><b id="s-ms">0</b><span>平均耗时 ms</span></div>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>选区</h2>
+      <div class="hint" id="sel-info">未选择区域（默认整帧）</div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const DEDUP_MS = 10000;      // 去重窗口
+  const MIN_TEXT_LEN = 3;      // 与后端 /ocr 保持一致
+  const MAX_OUT_W = 1600;      // 截帧输出最大宽度，避免请求体过大
+
+  const $ = (id) => document.getElementById(id);
+  const video = $("video"), overlay = $("overlay"), stage = $("stage");
+  const octx = overlay.getContext("2d");
+
+  let stream = null;
+  let sel = null;              // 选区（相对 canvas 显示坐标）{x,y,w,h}
+  let dragging = false, dragStart = null, dragRect = null;
+  let running = false, busy = false, timer = null;
+
+  const stats = { total: 0, bad: 0, doubt: 0, ok: 0, ocr: 0, msSum: 0 };
+  const seen = new Map();      // text -> timestamp
+  const logEl = $("log");
+  let logEmpty = logEl.querySelector(".empty");
+
+  // ---------- 服务地址 ----------
+  const defaultServer = (location.protocol === "file:") ? "http://127.0.0.1:8001" : location.origin;
+  $("server").value = localStorage.getItem("danmu_server") || defaultServer;
+  const api = () => $("server").value.trim().replace(/\/+$/, "");
+
+  // ---------- 顶部告警条 ----------
+  let alertTimer = null, lastAlertKey = "", lastAlertAt = 0;
+  function notify(msg, kind) {
+    const el = $("alert");
+    el.textContent = msg;
+    el.className = "alert" + (kind === "ok" ? " ok" : "");
+    el.style.display = "block";
+    clearTimeout(alertTimer);
+    // 成功提示自动消失；错误提示常驻，直到用户点击关闭或识别恢复正常，确保"失败可见"
+    alertTimer = (kind === "ok")
+      ? setTimeout(() => { el.style.display = "none"; }, 8000)
+      : null;
+  }
+  // 巡检高频失败时做提示节流：同一原因 6 秒内只弹一次，避免刷屏
+  function notifyThrottled(msg, kind, key) {
+    const now = Date.now();
+    if (key && key === lastAlertKey && now - lastAlertAt < 6000) return;
+    lastAlertKey = key || msg; lastAlertAt = now;
+    notify(msg, kind);
+  }
+  $("alert").addEventListener("click", () => { $("alert").style.display = "none"; });
+
+  // ---------- 状态灯 ----------
+  function setDot(id, cls, text) {
+    const d = $(id);
+    d.className = "dot" + (cls ? " " + cls : "");
+    if (text) $(id.replace("dot-", "txt-")).textContent = text;
+  }
+
+  async function checkHealth() {
+    try {
+      const r = await fetch(api() + "/health", { cache: "no-store" });
+      const j = await r.json();
+      setDot("dot-svc", "ok", "识别服务：正常（" + (j.device || "?") + "）");
+      return true;
+    } catch (e) {
+      setDot("dot-svc", "err", "识别服务：未连接");
+      return false;
+    }
+  }
+
+  // ---------- 选区持久化 ----------
+  function saveSel() {
+    try { localStorage.setItem("danmu_sel", JSON.stringify(sel)); } catch (e) {}
+    $("sel-info").textContent = sel
+      ? `选区 ${Math.round(sel.x)}, ${Math.round(sel.y)} ，${Math.round(sel.w)} × ${Math.round(sel.h)} px`
+      : "未选择区域（默认整帧）";
+  }
+  function loadSel() {
+    try {
+      const s = JSON.parse(localStorage.getItem("danmu_sel") || "null");
+      if (s && s.w > 4 && s.h > 4) { sel = s; saveSel(); }
+    } catch (e) {}
+  }
+
+  // ---------- canvas 尺寸同步 ----------
+  function syncCanvas() {
+    const r = video.getBoundingClientRect();
+    if (r.width < 1) return;
+    overlay.width = Math.round(r.width);
+    overlay.height = Math.round(r.height);
+    overlay.style.width = r.width + "px";
+    overlay.style.height = r.height + "px";
+    drawOverlay();
+  }
+
+  function drawOverlay() {
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+    const r = dragRect || sel;
+    if (!r) return;
+    octx.save();
+    octx.fillStyle = "rgba(47,111,237,0.14)";
+    octx.fillRect(r.x, r.y, r.w, r.h);
+    octx.strokeStyle = "#4d8cff";
+    octx.lineWidth = 1.5;
+    octx.setLineDash([6, 4]);
+    octx.strokeRect(r.x, r.y, r.w, r.h);
+    // 四角标记
+    octx.setLineDash([]);
+    octx.fillStyle = "#4d8cff";
+    const cs = 5;
+    [[r.x, r.y], [r.x + r.w, r.y], [r.x, r.y + r.h], [r.x + r.w, r.y + r.h]].forEach(([cx, cy]) => {
+      octx.fillRect(cx - cs / 2, cy - cs / 2, cs, cs);
+    });
+    octx.restore();
+  }
+
+  // ---------- 框选交互 ----------
+  function pos(e) {
+    const r = overlay.getBoundingClientRect();
+    return { x: Math.max(0, Math.min(e.clientX - r.left, overlay.width)),
+             y: Math.max(0, Math.min(e.clientY - r.top, overlay.height)) };
+  }
+  overlay.addEventListener("mousedown", (e) => {
+    dragging = true; dragStart = pos(e);
+    dragRect = { x: dragStart.x, y: dragStart.y, w: 0, h: 0 };
+    e.preventDefault();
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const p = pos(e);
+    dragRect = {
+      x: Math.min(dragStart.x, p.x), y: Math.min(dragStart.y, p.y),
+      w: Math.abs(p.x - dragStart.x), h: Math.abs(p.y - dragStart.y),
+    };
+    drawOverlay();
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    if (dragRect && dragRect.w > 8 && dragRect.h > 8) {
+      sel = dragRect;
+      saveSel();
+      setDot("dot-cap", "ok", "屏幕捕获：已开启（选区就绪）");
+    }
+    dragRect = null;
+    drawOverlay();
+  });
+
+  window.addEventListener("resize", syncCanvas);
+  if (window.ResizeObserver) new ResizeObserver(syncCanvas).observe(video);
+
+  // ---------- 屏幕捕获 ----------
+  $("btn-capture").addEventListener("click", async () => {
+    try {
+      stream = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 15, max: 30 } }, audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+      $("placeholder").style.display = "none";
+      setDot("dot-cap", "ok", "屏幕捕获：已开启");
+      $("btn-capture").disabled = true;
+      $("btn-stop").disabled = false;
+      $("btn-reset").disabled = false;
+      $("btn-run").disabled = false;
+      $("btn-once").disabled = false;
+      stream.getVideoTracks()[0].addEventListener("ended", stopCapture);
+      setTimeout(syncCanvas, 120);
+    } catch (e) {
+      setDot("dot-cap", "err", "屏幕捕获：已取消或被拒绝");
+    }
+  });
+
+  function stopCapture() {
+    running = false;
+    clearInterval(timer); timer = null;
+    if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+    video.srcObject = null;
+    $("placeholder").style.display = "";
+    $("btn-capture").disabled = false;
+    $("btn-stop").disabled = true;
+    $("btn-reset").disabled = true;
+    $("btn-run").disabled = true;
+    $("btn-once").disabled = true;
+    $("btn-run").classList.remove("on");
+    $("btn-run").textContent = "开始巡检";
+    setDot("dot-cap", "", "屏幕捕获：未开启");
+  }
+  $("btn-stop").addEventListener("click", stopCapture);
+  $("btn-reset").addEventListener("click", () => { sel = null; saveSel(); drawOverlay(); });
+
+  // ---------- 截帧 ----------
+  function grabBase64() {
+    if (!stream || !video.videoWidth || !video.videoHeight) {
+      return { err: "未取到画面：请先点「开始捕获屏幕」，或确认屏幕共享未被中断。" };
+    }
+    if (!overlay.width || !overlay.height) {
+      return { err: "未取到画面：预览区尺寸为 0，请调整窗口大小后再试。" };
+    }
+    const vw = video.videoWidth, vh = video.videoHeight;
+    const sx = vw / overlay.width, sy = vh / overlay.height;
+    const r = sel || { x: 0, y: 0, w: overlay.width, h: overlay.height };
+    let cx = Math.round(r.x * sx), cy = Math.round(r.y * sy);
+    let cw = Math.round(r.w * sx), ch = Math.round(r.h * sy);
+    cx = Math.max(0, Math.min(cx, vw - 1)); cy = Math.max(0, Math.min(cy, vh - 1));
+    cw = Math.max(1, Math.min(cw, vw - cx)); ch = Math.max(1, Math.min(ch, vh - cy));
+
+    const off = document.createElement("canvas");
+    const scale = cw > MAX_OUT_W ? MAX_OUT_W / cw : 1;
+    off.width = Math.round(cw * scale);
+    off.height = Math.round(ch * scale);
+    const c = off.getContext("2d");
+    c.drawImage(video, cx, cy, cw, ch, 0, 0, off.width, off.height);
+    try {
+      const url = off.toDataURL("image/png");
+      const b64 = url.slice(url.indexOf(",") + 1);
+      if (!b64) return { err: "截帧数据为空，未上传。" };
+      return { b64: b64 };
+    } catch (e) {
+      return { err: "截帧编码失败：" + ((e && e.message) || e) };
+    }
+  }
+
+  // ---------- 去重 ----------
+  function isNew(text) {
+    const now = Date.now();
+    for (const [k, v] of seen) if (now - v > DEDUP_MS) seen.delete(k);
+    if (seen.has(text)) return false;
+    seen.set(text, now);
+    return true;
+  }
+
+  // ---------- 日志渲染 ----------
+  function addItem(text, label, conf, latency) {
+    if (logEmpty) { logEmpty.remove(); logEmpty = null; }
+    const isOk = (label === "正常");
+    const minConf = parseFloat($("minconf").value);
+    const cls = isOk ? "ok" : (conf >= minConf ? "bad" : "doubt");
+    const tagTxt = isOk ? "正常" : (conf >= minConf ? "违规" : "存疑");
+    const t = new Date().toLocaleTimeString("zh-CN", { hour12: false });
+
+    const el = document.createElement("div");
+    el.className = "item " + cls;
+    const meta = document.createElement("div");
+    meta.className = "meta";
+    meta.innerHTML = `<span class="tag">[${tagTxt}]</span>`
+      + `<span>${t} · ${latency} ms</span>`;
+    const txt = document.createElement("div");
+    txt.className = "txt";
+    txt.textContent = `${text}  →  ${label} (${(conf * 100).toFixed(1)}%)`;
+    el.appendChild(meta); el.appendChild(txt);
+    logEl.insertBefore(el, logEl.firstChild);
+    while (logEl.children.length > 300) logEl.removeChild(logEl.lastChild);
+  }
+
+  function updateStats() {
+    $("s-total").textContent = stats.total;
+    $("s-bad").textContent = stats.bad;
+    $("s-doubt").textContent = stats.doubt;
+    $("s-ok").textContent = stats.ok;
+    $("s-ocr").textContent = stats.ocr;
+    $("s-ms").textContent = stats.ocr ? Math.round(stats.msSum / stats.ocr) : 0;
+  }
+
+  // ---------- 引擎预热 ----------
+  function setWarmState(text, color) {
+    const el = $("warmup-state");
+    el.textContent = text;
+    el.style.color = color || "#8b93a7";
+  }
+
+  let warming = false;
+  async function warmup(silent) {
+    if (warming) return;
+    warming = true;
+    $("btn-warmup").disabled = true;
+    setDot("dot-ocr", "warn", "OCR 引擎：预热中…");
+    setWarmState("预热中…", "#d9a02e");
+    try {
+      // 用 64×64 空白图空跑一次 /ocr，触发后端 RapidOCR 懒加载（尺寸过小会触发检测模型异常）
+      const c = document.createElement("canvas");
+      c.width = 64; c.height = 64;
+      const cx = c.getContext("2d");
+      cx.fillStyle = "#ffffff";
+      cx.fillRect(0, 0, 64, 64);
+      const url = c.toDataURL("image/png");
+      const b64 = url.slice(url.indexOf(",") + 1);
+
+      const t0 = performance.now();
+      const r = await fetch(api() + "/ocr", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: b64 }),
+      });
+      if (!r.ok) {
+        const body = await r.text().catch(() => "");
+        throw new Error("HTTP " + r.status + (body ? "：" + String(body).slice(0, 140) : ""));
+      }
+      await r.json();
+      const ms = Math.round(performance.now() - t0);
+      setDot("dot-ocr", "ok", "OCR 引擎：已就绪");
+      setWarmState("就绪（" + ms + " ms）", "#35c07a");
+      if (!silent) notify("OCR 引擎加载完成，耗时 " + ms + " ms，可以开始巡检了。", "ok");
+    } catch (e) {
+      const detail = String((e && e.message) || e);
+      setDot("dot-ocr", "err", "OCR 引擎：加载失败");
+      setWarmState("失败", "#e04848");
+      notify("OCR 引擎预热失败：" + detail + "。请确认后端已启动、服务地址为 " + api()
+        + "，且本页通过 " + api() + "/screen.html 打开，然后点「预热 OCR 引擎」重试。");
+    } finally {
+      warming = false;
+      $("btn-warmup").disabled = false;
+    }
+  }
+
+  // ---------- 单轮识别 ----------
+  const MAX_FAIL_STREAK = 5;
+  let failStreak = 0;
+
+  function onOk() {
+    failStreak = 0;
+    const d = $("dot-svc");
+    if (d.classList.contains("err") || d.classList.contains("warn")) {
+      setDot("dot-svc", "ok", "识别服务：正常");
+    }
+    // 识别恢复正常后自动收起遗留的错误提示
+    const al = $("alert");
+    if (al.style.display === "block" && !al.classList.contains("ok")) {
+      clearTimeout(alertTimer);
+      al.style.display = "none";
+    }
+  }
+
+  function checkAutoStop() {
+    if (running && failStreak >= MAX_FAIL_STREAK) {
+      stopRun();
+      notify("识别已连续失败 " + failStreak + " 次，巡检已自动停止。请排查原因后重新开始。");
+    }
+  }
+
+  async function tick() {
+    if (busy) return;
+    busy = true;
+    try {
+      const g = grabBase64();
+      if (g.err) {
+        failStreak++;
+        notifyThrottled(g.err, "err", "grab");
+        checkAutoStop();
+        return;
+      }
+
+      const t0 = performance.now();
+      const ro = await fetch(api() + "/ocr", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ image: g.b64 }),
+      });
+      if (!ro.ok) {
+        const body = await ro.text().catch(() => "");
+        throw new Error("OCR 接口 HTTP " + ro.status + (body ? "：" + String(body).slice(0, 140) : ""));
+      }
+      const ocrData = await ro.json();
+      setDot("dot-ocr", "ok", "OCR 引擎：已就绪");
+      stats.ocr++;
+
+      const fresh = (ocrData.texts || [])
+        .map(t => t.trim())
+        .filter(t => t.length >= MIN_TEXT_LEN && isNew(t));
+      if (!fresh.length) { onOk(); updateStats(); return; }
+
+      const rp = await fetch(api() + "/predict", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ texts: fresh }),
+      });
+      if (!rp.ok) {
+        const body = await rp.text().catch(() => "");
+        throw new Error("识别接口 HTTP " + rp.status + (body ? "：" + String(body).slice(0, 140) : ""));
+      }
+      const pred = await rp.json();
+      const ms = Math.round(performance.now() - t0);
+      stats.msSum += ms;
+      onOk();
+
+      const minConf = parseFloat($("minconf").value);
+      (pred.results || []).forEach(item => {
+        const label = item.label;
+        const conf = (item.probabilities && item.probabilities[label]) || 0;
+        stats.total++;
+        if (label === "正常") stats.ok++;
+        else if (conf >= minConf) stats.bad++;
+        else stats.doubt++;
+        addItem(item.text, label, conf, ms);
+      });
+      updateStats();
+    } catch (e) {
+      failStreak++;
+      const detail = String((e && e.message) || e);
+      const isConn = /Failed to fetch|NetworkError|Load failed|Network request failed|无法连接/i.test(detail);
+      const msg = isConn
+        ? "无法连接识别服务 " + api() + "（" + detail + "）。请确认后端已启动、服务地址填写正确，且本页是通过 "
+          + api() + "/screen.html 打开的。"
+        : "识别失败：" + detail;
+      setDot("dot-svc", "err", "识别服务：请求失败");
+      notifyThrottled(msg, "err", "req:" + detail.slice(0, 60));
+      checkAutoStop();
+    } finally {
+      busy = false;
+    }
+  }
+
+  // ---------- 按钮 ----------
+  function stopRun() {
+    running = false;
+    clearInterval(timer); timer = null;
+    $("btn-run").textContent = "开始巡检";
+    $("btn-run").classList.remove("on");
+  }
+
+  $("btn-once").addEventListener("click", tick);
+  $("btn-warmup").addEventListener("click", () => warmup(false));
+
+  $("btn-run").addEventListener("click", () => {
+    if (running) {
+      stopRun();
+    } else {
+      running = true;
+      failStreak = 0;
+      const iv = parseFloat($("interval").value) * 1000;
+      timer = setInterval(tick, iv);
+      tick();
+      $("btn-run").textContent = "停止巡检";
+      $("btn-run").classList.add("on");
+    }
+  });
+
+  $("btn-clear").addEventListener("click", () => {
+    logEl.innerHTML = '<div class="empty">暂无结果</div>';
+    logEmpty = logEl.querySelector(".empty");
+    stats.total = stats.bad = stats.doubt = stats.ok = stats.ocr = stats.msSum = 0;
+    seen.clear();
+    updateStats();
+  });
+
+  $("interval").addEventListener("input", (e) => {
+    $("interval-val").textContent = parseFloat(e.target.value).toFixed(1) + "s";
+    if (running) { clearInterval(timer); timer = setInterval(tick, parseFloat(e.target.value) * 1000); }
+  });
+  $("minconf").addEventListener("input", (e) => {
+    $("minconf-val").textContent = parseFloat(e.target.value).toFixed(2);
+  });
+  $("server").addEventListener("change", () => {
+    localStorage.setItem("danmu_server", api());
+    checkHealth();
+  });
+
+  // ---------- 初始化 ----------
+  loadSel();
+  updateStats();
+  (async () => {
+    const ok = await checkHealth();
+    if (ok) {
+      warmup(true);   // 页面打开后自动预热引擎，成功时不打扰
+    } else {
+      setWarmState("待连接", "#d9a02e");
+      notify("识别服务未连接：" + api() + "。请先启动后端，并确认本页是通过 http://127.0.0.1:8001/screen.html 打开的"
+        + "（file:// 或其它端口会因跨源、无服务而失败）。");
+    }
+  })();
+})();
+</script>
+</body>
+</html>

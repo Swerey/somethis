@@ -1,0 +1,169 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>发帖 / 上传视频 - SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区发帖与上传视频发布页。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" style="max-width:760px;flex-direction:column">
+  <div class="tabs">
+    <a href="#" id="tabPost" class="active" onclick="switchTab('post')" data-icon="post">发布帖子</a>
+    <a href="#" id="tabVideo" onclick="switchTab('video')" data-icon="upload">上传视频</a>
+  </div>
+
+  <!-- 发帖 -->
+  <div class="card" style="width:100%" id="panelPost">
+    <div class="card-title" data-icon="post">发布帖子（全文合规校验）</div>
+    <div class="form-group">
+      <label>标题</label>
+      <input class="form-input" id="postTitle" maxlength="100" placeholder="一句话说清主题">
+      <div class="hint" id="titleHint"></div>
+    </div>
+    <div class="form-group">
+      <label>内容</label>
+      <textarea class="form-input" id="postContent" placeholder="分享你的观点...（输入时实时预检违规词）"></textarea>
+      <div class="hint" id="contentHint">等待输入...</div>
+    </div>
+    <div class="form-group">
+      <label>板块</label>
+      <select class="form-input" id="postCategory" style="max-width:200px">
+        <option>科技</option><option>游戏</option><option>影视</option>
+        <option>数码</option><option>体育</option><option>生活</option>
+        <option>求助</option><option>闲聊</option>
+      </select>
+    </div>
+    <button class="btn primary" onclick="publishPost()" data-icon="post">发布</button>
+  </div>
+
+  <!-- 上传视频 -->
+  <div class="card" style="width:100%;display:none" id="panelVideo">
+    <div class="card-title" data-icon="upload">上传视频（标题/描述合规校验）</div>
+    <div class="form-group">
+      <label>标题</label>
+      <input class="form-input" id="videoTitle" maxlength="100" placeholder="视频标题">
+      <div class="hint" id="videoTitleHint"></div>
+    </div>
+    <div class="form-group">
+      <label>描述</label>
+      <input class="form-input" id="videoDesc" placeholder="视频简介（可选）">
+      <div class="hint" id="videoDescHint"></div>
+    </div>
+    <div class="form-group">
+      <label>视频文件（mp4/webm/mov，≤200MB）</label>
+      <input type="file" class="form-input" id="videoFile" accept="video/mp4,video/webm,video/quicktime">
+      <video id="videoPreview" controls style="display:none;max-width:100%;max-height:240px;margin-top:8px;border-radius:8px"></video>
+    </div>
+    <div class="form-group">
+      <label>封面图片（可选，jpg/png/webp）</label>
+      <input type="file" class="form-input" id="videoCover" accept="image/jpeg,image/png,image/webp">
+      <img loading="lazy" id="coverPreview" alt="" style="display:none;max-width:240px;max-height:160px;margin-top:8px;border-radius:8px;object-fit:cover">
+    </div>
+    <button class="btn primary" onclick="uploadVideo()" data-icon="upload">上传</button>
+    <div class="hint" id="videoStatus"></div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav();
+let precheckTimer = null;
+
+function switchTab(t) {
+  document.getElementById('panelPost').style.display = t === 'post' ? '' : 'none';
+  document.getElementById('panelVideo').style.display = t === 'video' ? '' : 'none';
+  document.getElementById('tabPost').className = t === 'post' ? 'active' : '';
+  document.getElementById('tabVideo').className = t === 'video' ? 'active' : '';
+}
+
+// 支持 ?tab=video 直达上传视频页
+const initTab = new URLSearchParams(location.search).get('tab') === 'video' ? 'video' : 'post';
+switchTab(initTab);
+
+function bindPrecheck() {
+  const title = document.getElementById('postTitle');
+  const content = document.getElementById('postContent');
+  const vtitle = document.getElementById('videoTitle');
+  const vdesc = document.getElementById('videoDesc');
+  const pairs = [
+    [title, 'titleHint'], [content, 'contentHint'],
+    [vtitle, 'videoTitleHint'], [vdesc, 'videoDescHint'],
+  ];
+  pairs.forEach(([el, hintId]) => {
+    el.addEventListener('input', () => {
+      clearTimeout(precheckTimer);
+      precheckTimer = setTimeout(async () => {
+        const t = el.value.trim();
+        const hint = document.getElementById(hintId);
+        if (!t) { hint.textContent = '等待输入...'; hint.className = 'hint'; return; }
+        try {
+          const r = await API.post('/api/posts/precheck', { text: t });
+          if (r.safe) { hint.textContent = '内容正常'; hint.className = 'hint ok'; }
+          else { hint.textContent = '⚠ ' + r.message; hint.className = 'hint danger'; }
+        } catch (e) { hint.textContent = '预检失败：' + e.message; hint.className = 'hint'; }
+      }, 500);
+    });
+  });
+}
+
+async function publishPost() {
+  if (!isLogin()) { showToast('请先登录'); location.href = 'login.html'; return; }
+  const title = document.getElementById('postTitle').value.trim();
+  const content = document.getElementById('postContent').value.trim();
+  const category = document.getElementById('postCategory').value;
+  if (!title || !content) { showToast('标题和内容不能为空'); return; }
+  try {
+    const res = await API.post('/api/posts', { title, content, category });
+    showToast('发布成功' + (res.audit.status !== 'visible' ? '：' + res.audit.message : ''), res.audit.status === 'visible');
+    if (res.audit.status !== 'blocked') setTimeout(() => location.href = 'post.html?id=' + res.post.id, 900);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+async function uploadVideo() {
+  if (!isLogin()) { showToast('请先登录'); location.href = 'login.html'; return; }
+  const title = document.getElementById('videoTitle').value.trim();
+  const desc = document.getElementById('videoDesc').value.trim();
+  const file = document.getElementById('videoFile').files[0];
+  const coverFile = document.getElementById('videoCover').files[0];
+  if (!title || !file) { showToast('请填写标题并选择视频文件'); return; }
+  const fd = new FormData();
+  fd.append('title', title);
+  fd.append('description', desc);
+  fd.append('file', file);
+  if (coverFile) fd.append('cover', coverFile);
+  document.getElementById('videoStatus').textContent = '上传中...';
+  try {
+    const res = await API.postForm('/api/videos/upload', fd);
+    const audit = res.video.audit || {};
+    document.getElementById('videoStatus').textContent = '上传成功：' + res.video.title + '（审核：' + (audit.message || '已提交审核') + '）。视频已进入待审核队列，管理员审核通过后将公开展示。';
+    showToast('上传成功，待管理员审核', 'success');
+  } catch (e) {
+    document.getElementById('videoStatus').textContent = '';
+    showToast(e.message, 'error');
+  }
+}
+
+// 视频/封面本地预览
+document.getElementById('videoFile').addEventListener('change', function () {
+  const p = document.getElementById('videoPreview');
+  if (this.files[0]) { p.src = URL.createObjectURL(this.files[0]); p.style.display = ''; }
+  else { p.src = ''; p.style.display = 'none'; }
+});
+document.getElementById('videoCover').addEventListener('change', function () {
+  const p = document.getElementById('coverPreview');
+  if (this.files[0]) { p.src = URL.createObjectURL(this.files[0]); p.style.display = ''; }
+  else { p.src = ''; p.style.display = 'none'; }
+});
+
+bindPrecheck();
+</script>
+</body>
+</html>

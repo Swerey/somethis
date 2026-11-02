@@ -1,0 +1,72 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>直播间列表- SomeWhere社区</title>
+<meta name="description" content="SomeWhere社区直播间列表，发现正在直播的房间。">
+
+<link rel="stylesheet" href="common.css?v=20261029">
+
+</head>
+<body>
+<div class="nav" id="nav"></div>
+
+<div class="page" style="flex-direction:column;max-width:860px">
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="live">开播<span class="hot-tag" style="background:#000000;border:1px solid #ffffff">LIVE</span></div>
+    <div class="form-group">
+      <label>直播间标题</label>
+      <input class="form-input" id="roomTitle" maxlength="100" placeholder="给直播间起个名字">
+    </div>
+    <button class="btn primary" onclick="createRoom()" data-icon="live">创建直播间 / 开播</button>
+    <div class="hint" id="roomHint"></div>
+  </div>
+
+  <div class="card" style="width:100%">
+    <div class="card-title" data-icon="live">直播中的房间</div>
+    <div id="roomList"><div class="empty-tip">加载中...</div></div>
+  </div>
+</div>
+
+<script src="icons.js?v=20261029"></script>
+<script src="api.js?v=20261029"></script>
+<script src="ui.js?v=20261029"></script>
+<script>
+renderNav('live');
+
+async function loadRooms() {
+  const el = document.getElementById('roomList');
+  try {
+    const res = await API.get('/api/live/rooms');
+    if (!res.items.length) { el.innerHTML = '<div class="empty-tip">暂无直播，快来开播吧</div>'; return; }
+    el.innerHTML = res.items.map(r => `
+      <div class="video-card" onclick="location.href='live_room.html?id=${r.id}'">
+        <div class="video-thumb"><img loading="lazy" class="cover-img" src="${videoCover(r)}" alt="" onerror="this.remove()"><span class="play-mask">${getIcon('live', 22)}</span></div>
+        <div style="flex:1;min-width:0">
+          <div class="v-title">${esc(r.title)}</div>
+          <div class="v-desc">主播：{userLink(r.user_id, esc(r.nickname || r.username || ''))}</div>
+          <div class="v-meta">${getIcon('live', 12)} ${r.viewer_count} 人在看 · ${timeAgo(r.started_at || r.created_at)}</div>
+        </div>
+      </div>`).join('');
+  } catch (e) {
+    if (!e._toasted) showToast(e.message, 'error');
+    renderEmpty(el, '加载失败：' + esc(e.message));
+  }
+}
+
+async function createRoom() {
+  if (!isLogin()) { showToast('请先登录'); location.href = 'login.html'; return; }
+  const title = document.getElementById('roomTitle').value.trim();
+  if (!title) { showToast('请填写直播间标题'); return; }
+  try {
+    const res = await API.post('/api/live/rooms', { title, cover: '' });
+    document.getElementById('roomHint').textContent = '开播成功，正在进入直播间...';
+    setTimeout(() => location.href = 'live_room.html?id=' + res.room.id, 600);
+  } catch (e) { showToast(e.message, 'error'); }
+}
+
+loadRooms();
+</script>
+</body>
+</html>

@@ -1,0 +1,337 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>直播弹幕违规内容实时识别系统</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "Microsoft YaHei", "PingFang SC", sans-serif; background: #0f1220; color: #e6e8f0; height: 100vh; overflow: hidden; }
+  .wrap { display: flex; flex-direction: column; height: 100vh; }
+
+  /* 顶部标题栏 */
+  header { display: flex; align-items: center; gap: 16px; padding: 10px 20px; background: linear-gradient(90deg, #1a1f3a, #232a4d); border-bottom: 1px solid #2f3763; }
+  header h1 { font-size: 18px; font-weight: 700; letter-spacing: 1px; }
+  header .sub { font-size: 12px; color: #8b93b8; }
+  .status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: #888; }
+  .dot.on { background: #2ecc71; box-shadow: 0 0 8px #2ecc71; }
+  .dot.off { background: #e74c3c; box-shadow: 0 0 8px #e74c3c; }
+  .badge { background: #2f3763; border: 1px solid #3d4a80; border-radius: 12px; padding: 3px 12px; font-size: 12px; color: #aab3dd; }
+
+  /* 主区域 */
+  main { flex: 1; display: flex; gap: 12px; padding: 12px 20px; min-height: 0; }
+
+  /* 左侧：弹幕流 */
+  .stage-panel { flex: 1.4; display: flex; flex-direction: column; min-width: 0; }
+  .stage-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 8px; }
+  .stage-title .live-tag { background: #e74c3c; color: #fff; font-size: 11px; padding: 1px 8px; border-radius: 4px; animation: blink 1.2s infinite; }
+  @keyframes blink { 50% { opacity: 0.4; } }
+  .stage { position: relative; flex: 1; background: radial-gradient(ellipse at center, #2a3058 0%, #151a33 70%); border: 1px solid #2f3763; border-radius: 10px; overflow: hidden; min-height: 260px; }
+  .stage .avatar { position: absolute; left: 50%; top: 40%; transform: translate(-50%, -50%); width: 110px; height: 110px; border-radius: 50%; background: linear-gradient(135deg, #4a56a8, #6a5acd); display: flex; align-items: center; justify-content: center; font-size: 42px; opacity: 0.35; }
+  .stage .stream-name { position: absolute; left: 16px; bottom: 14px; font-size: 13px; color: #7d86ad; }
+  .stage .fps { position: absolute; right: 14px; bottom: 14px; font-size: 12px; color: #5f688f; }
+
+  .danmaku { position: absolute; white-space: nowrap; font-size: 17px; font-weight: 600; text-shadow: 1px 1px 3px rgba(0,0,0,0.9); will-change: transform; }
+  .danmaku.normal { color: #d8dcf0; }
+  .danmaku.bad { color: #ff4757; text-shadow: 0 0 8px rgba(255, 71, 87, 0.6); }
+  .danmaku .tag { font-size: 10px; background: #ff4757; color: #fff; border-radius: 3px; padding: 1px 5px; margin-left: 6px; vertical-align: middle; font-weight: 400; }
+
+  .controls { display: flex; align-items: center; gap: 10px; margin-top: 10px; flex-wrap: wrap; }
+  .controls button { background: #2f3763; color: #dbe0f5; border: 1px solid #3d4a80; border-radius: 6px; padding: 6px 14px; font-size: 13px; cursor: pointer; }
+  .controls button:hover { background: #3d4a80; }
+  .controls button.active { background: #4a56a8; border-color: #6a7ad8; }
+  .controls input[type=text] { flex: 1; min-width: 160px; background: #1a1f3a; border: 1px solid #3d4a80; border-radius: 6px; color: #e6e8f0; padding: 6px 10px; font-size: 13px; outline: none; }
+  .controls .speed-label { font-size: 12px; color: #8b93b8; }
+
+  /* 右侧：检测结果 */
+  .right-panel { flex: 1; display: flex; flex-direction: column; min-width: 0; gap: 12px; }
+  .result-panel { flex: 1.2; display: flex; flex-direction: column; min-height: 0; }
+  .panel-title { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+  .result-list { flex: 1; overflow-y: auto; background: #151a33; border: 1px solid #2f3763; border-radius: 10px; padding: 10px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+  .result-item { background: #1c2240; border-left: 4px solid #2ecc71; border-radius: 6px; padding: 8px 12px; font-size: 13px; animation: fadeIn 0.3s; }
+  .result-item.bad { border-left-color: #ff4757; }
+  .result-item .txt { word-break: break-all; }
+  .result-item .meta { display: flex; align-items: center; gap: 8px; margin-top: 5px; font-size: 12px; color: #8b93b8; }
+  .result-item .pbar { height: 5px; background: #2f3763; border-radius: 3px; margin-top: 6px; overflow: hidden; }
+  .result-item .pbar > i { display: block; height: 100%; background: #2ecc71; }
+  .result-item.bad .pbar > i { background: #ff4757; }
+  .label-chip { font-size: 11px; padding: 1px 8px; border-radius: 10px; color: #fff; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; } }
+  .empty-tip { color: #5f688f; font-size: 13px; text-align: center; margin-top: 30px; }
+
+  /* 底部统计 */
+  .stats-panel { display: flex; gap: 12px; min-height: 150px; }
+  .stat-cards { display: flex; flex-direction: column; gap: 8px; width: 200px; }
+  .stat-card { background: #1a1f3a; border: 1px solid #2f3763; border-radius: 8px; padding: 10px 14px; }
+  .stat-card .num { font-size: 22px; font-weight: 700; }
+  .stat-card .lbl { font-size: 12px; color: #8b93b8; }
+  .stat-card .num.red { color: #ff4757; }
+  .stat-card .num.green { color: #2ecc71; }
+  .chart-box { flex: 1; background: #1a1f3a; border: 1px solid #2f3763; border-radius: 8px; padding: 10px; min-width: 0; }
+
+  /* 告警横幅 */
+  .alert { position: fixed; top: 60px; left: 50%; transform: translateX(-50%); background: rgba(255, 71, 87, 0.92); color: #fff; padding: 10px 22px; border-radius: 8px; font-size: 14px; font-weight: 600; z-index: 99; display: none; box-shadow: 0 4px 20px rgba(255,71,87,0.4); }
+
+  /* 滚动条 */
+  ::-webkit-scrollbar { width: 6px; } ::-webkit-scrollbar-thumb { background: #3d4a80; border-radius: 3px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>直播弹幕违规内容实时识别系统</h1>
+    <span class="sub">Focal Loss + FGM 改进 BERT · ONNX 轻量化</span>
+    <div class="status">
+      <span class="dot" id="statusDot"></span>
+      <span id="statusText">连接中...</span>
+      <span class="badge" id="deviceBadge">-</span>
+      <span class="badge">延迟 <span id="latencyBadge">-</span> ms</span>
+    </div>
+  </header>
+
+  <div class="alert" id="alertBar"></div>
+
+  <main>
+    <div class="stage-panel">
+      <div class="stage-title">直播弹幕流 <span class="live-tag">LIVE</span></div>
+      <div class="stage" id="stage">
+        <div class="avatar">📺</div>
+        <div class="stream-name">示例直播间 · 弹幕模拟</div>
+        <div class="fps" id="fps">0 条/min</div>
+      </div>
+      <div class="controls">
+        <button id="btnPlay">⏸ 暂停</button>
+        <span class="speed-label">速度</span>
+        <button id="spd1" class="active">1x</button>
+        <button id="spd2">2x</button>
+        <button id="spd4">4x</button>
+        <input type="text" id="userDanmaku" placeholder="输入一条弹幕，回车发射（自动识别）">
+        <button id="btnClear">清屏</button>
+      </div>
+    </div>
+
+    <div class="right-panel">
+      <div class="result-panel">
+        <div class="panel-title">实时检测结果</div>
+        <div class="result-list" id="resultList">
+          <div class="empty-tip">弹幕出现后将实时显示识别结果</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <div class="stats-panel">
+    <div class="stat-cards">
+      <div class="stat-card"><div class="num" id="statTotal">0</div><div class="lbl">已检测弹幕</div></div>
+      <div class="stat-card"><div class="num red" id="statBad">0</div><div class="lbl">违规弹幕</div></div>
+      <div class="stat-card"><div class="num green" id="statRate">0%</div><div class="lbl">正常率</div></div>
+    </div>
+    <div class="chart-box"><canvas id="distChart"></canvas></div>
+  </div>
+</div>
+
+<script>
+const API = "";  // 同源
+const LABELS = ["正常", "色情低俗", "辱骂暴力", "广告引流", "敏感言论", "歧视煽动"];
+const LABEL_COLOR = ["#2ecc71", "#ff4757", "#ff6b81", "#ffa502", "#ff6348", "#e056fd"];
+
+// 内置弹幕样例库（覆盖六类）
+const SAMPLES = [
+  "主播今天心情真好，大家来聊天啊", "这个操作太秀了，666", "刚来直播间，主播玩的是什么游戏",
+  "哈哈哈哈笑死我了", "弹幕护体，支持主播", "晚上好呀各位观众老爷",
+  "免费送皮肤加群12345678", "加微信领红包，点击链接领取", "低价代练，私聊我，绝对便宜",
+  "这是垃圾主播，全家死光", "主播就是个废物，滚出直播圈", "你这种垃圾怎么不去死",
+  "色情直播加我QQ看更多", "想看福利的私聊我，懂的都懂", "深夜福利，加群看片",
+  "这个主播是汉奸吧，卖国贼", "支持港独的都是狗", "滚出中国，间谍主播",
+  "打死这个狗日的", "少数民族都是垃圾", "男人没一个好东西，都是畜生"
+];
+
+const state = {
+  running: true, speed: 1, queue: [], chart: null,
+  counts: [0, 0, 0, 0, 0, 0], total: 0, bad: 0, emitTimer: null, lastEmit: 0
+};
+
+// ---------- 服务状态 ----------
+async function checkHealth() {
+  try {
+    const r = await fetch(API + "/health", { cache: "no-store" });
+    const j = await r.json();
+    document.getElementById("statusDot").className = "dot on";
+    document.getElementById("statusText").textContent = "服务运行中";
+    document.getElementById("deviceBadge").textContent = j.device || "-";
+  } catch (e) {
+    document.getElementById("statusDot").className = "dot off";
+    document.getElementById("statusText").textContent = "服务离线";
+  }
+}
+setInterval(checkHealth, 5000); checkHealth();
+
+// ---------- 弹幕流 ----------
+function emitDanmaku(text, label) {
+  const stage = document.getElementById("stage");
+  const el = document.createElement("div");
+  const bad = label && label !== "正常";
+  el.className = "danmaku " + (bad ? "bad" : "normal");
+  el.innerHTML = escapeHtml(text) + (bad ? `<span class="tag">${label}</span>` : "");
+  stage.appendChild(el);
+
+  const stageW = stage.clientWidth;
+  const top = 18 + Math.random() * Math.max(stage.clientHeight - 60, 40);
+  const dur = (5 + Math.random() * 4) / state.speed;
+  el.style.top = top + "px";
+  el.style.left = stageW + "px";
+  const anim = el.animate([
+    { transform: `translateX(0)` },
+    { transform: `translateX(${-(stageW + el.offsetWidth + 40)}px)` }
+  ], { duration: dur * 1000, easing: "linear" });
+  anim.onfinish = () => el.remove();
+}
+
+function spawnLoop() {
+  state.emitTimer = setInterval(() => {
+    if (!state.running) return;
+    // 限速：按速度调节出弹幕频率
+    const now = Date.now();
+    if (now - state.lastEmit < 500 / state.speed) return;
+    state.lastEmit = now;
+    const text = state.queue.length ? state.queue.shift() : SAMPLES[Math.floor(Math.random() * SAMPLES.length)];
+    // 先出弹幕（灰色），异步识别后上色
+    emitDanmaku(text, null);
+    recognize([text]);
+  }, 260);
+}
+
+// ---------- 识别 ----------
+async function recognize(texts) {
+  try {
+    const r = await fetch(API + "/predict", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ texts })
+    });
+    const j = await r.json();
+    j.results.forEach(item => {
+      // 更新已发射弹幕颜色（最后一条同文本的）
+      paintDanmaku(item.text, item.label);
+      addResult(item, j.latency_ms);
+      updateStats(item.label);
+    });
+    document.getElementById("latencyBadge").textContent = j.latency_ms.toFixed(1);
+    return j;
+  } catch (e) {
+    alertBar("识别请求失败，请检查服务", true);
+    return null;
+  }
+}
+
+function paintDanmaku(text, label) {
+  const els = document.querySelectorAll(".danmaku");
+  const el = [...els].reverse().find(e => e.textContent.includes(text.slice(0, 8)));
+  if (!el) return;
+  const bad = label !== "正常";
+  el.className = "danmaku " + (bad ? "bad" : "normal");
+  if (bad) {
+    const tag = document.createElement("span");
+    tag.className = "tag"; tag.textContent = label;
+    el.appendChild(tag);
+    alertBar(`检测到违规内容：${label} — ${text.slice(0, 20)}`, true);
+  }
+}
+
+let alertTimer = null;
+function alertBar(msg, isAlert) {
+  const bar = document.getElementById("alertBar");
+  bar.textContent = msg;
+  bar.style.display = "block";
+  bar.style.background = isAlert ? "rgba(255,71,87,0.92)" : "rgba(46,204,113,0.92)";
+  clearTimeout(alertTimer);
+  alertTimer = setTimeout(() => bar.style.display = "none", 2500);
+}
+
+function addResult(item, latency) {
+  const list = document.getElementById("resultList");
+  document.querySelector(".empty-tip")?.remove();
+  const div = document.createElement("div");
+  const bad = item.label !== "正常";
+  div.className = "result-item" + (bad ? " bad" : "");
+  const conf = item.probabilities[item.label];
+  div.innerHTML = `
+    <div class="txt">${escapeHtml(item.text)}</div>
+    <div class="meta">
+      <span class="label-chip" style="background:${LABEL_COLOR[item.label_id]}">${item.label}</span>
+      <span>置信度 ${(conf * 100).toFixed(1)}%</span>
+      <span>${latency ? latency.toFixed(1) : "-"} ms</span>
+    </div>
+    <div class="pbar"><i style="width:${(conf * 100).toFixed(1)}%"></i></div>`;
+  list.prepend(div);
+  while (list.children.length > 60) list.lastChild.remove();
+}
+
+function updateStats(label) {
+  state.total++; state.counts[label] = state.counts[label] + 1;
+  if (label !== "正常") state.bad++;
+  document.getElementById("statTotal").textContent = state.total;
+  document.getElementById("statBad").textContent = state.bad;
+  document.getElementById("statRate").textContent = state.total ? ((1 - state.bad / state.total) * 100).toFixed(1) + "%" : "0%";
+  document.getElementById("fps").textContent = Math.round(state.total / (Date.now() / 60000) || 0) + " 条/min";
+  if (state.chart) state.chart.data.datasets[0].data = state.counts.slice();
+  state.chart.update();
+}
+
+// ---------- 图表 ----------
+function initChart() {
+  const ctx = document.getElementById("distChart").getContext("2d");
+  state.chart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: LABELS,
+      datasets: [{ label: "已检测条数", data: state.counts.slice(), backgroundColor: LABEL_COLOR, borderRadius: 4 }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, title: { display: true, text: "六类弹幕分布", color: "#aab3dd" } },
+      scales: {
+        x: { ticks: { color: "#8b93b8" }, grid: { color: "#2f3763" } },
+        y: { beginAtZero: true, ticks: { color: "#8b93b8", stepSize: 1 }, grid: { color: "#2f3763" } }
+      }
+    }
+  });
+}
+
+// ---------- 控件 ----------
+function setSpeed(v) {
+  state.speed = v;
+  document.querySelectorAll("#spd1,#spd2,#spd4").forEach(b => b.classList.remove("active"));
+  document.getElementById("spd" + v).classList.add("active");
+}
+
+document.getElementById("btnPlay").onclick = function () {
+  state.running = !state.running;
+  this.textContent = state.running ? "⏸ 暂停" : "▶ 播放";
+};
+document.getElementById("spd1").onclick = () => setSpeed(1);
+document.getElementById("spd2").onclick = () => setSpeed(2);
+document.getElementById("spd4").onclick = () => setSpeed(4);
+document.getElementById("btnClear").onclick = () => document.getElementById("stage").querySelectorAll(".danmaku").forEach(e => e.remove());
+
+const input = document.getElementById("userDanmaku");
+input.addEventListener("keydown", e => {
+  if (e.key === "Enter" && input.value.trim()) {
+    emitDanmaku(input.value.trim(), null);
+    recognize([input.value.trim()]);
+    input.value = "";
+  }
+});
+
+function escapeHtml(s) {
+  return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+// ---------- 启动 ----------
+initChart();
+spawnLoop();
+</script>
+</body>
+</html>
