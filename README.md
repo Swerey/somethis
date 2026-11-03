@@ -1,14 +1,3 @@
----
-AIGC:
-    Label: "1"
-    ContentProducer: 001191440300708461136T1XGW3
-    ProduceID: f67ee163a87ef462dc0fdbc04c8fed0b_a9b634d0cc6911f1898e525400248c00
-    ReservedCode1: 7++daOfvTfAk8+EI3yIEZpwbpGSzHANRBBJLueCUUYaKeGzKifFdblVz+Y8n0AqEbyASpc10/u6BresjFs1jeRfTx58JiljuF6AsB7JHE7mlmdENPkwQ4iDsP5RK1oTU19ujX/etiTg6ENXKTe4Do3SgaAce6lmM2OnvYXMf6QM3st1Rhxiv8wtOMsU=
-    ContentPropagator: 001191440300708461136T1XGW3
-    PropagateID: f67ee163a87ef462dc0fdbc04c8fed0b_a9b634d0cc6911f1898e525400248c00
-    ReservedCode2: 7++daOfvTfAk8+EI3yIEZpwbpGSzHANRBBJLueCUUYaKeGzKifFdblVz+Y8n0AqEbyASpc10/u6BresjFs1jeRfTx58JiljuF6AsB7JHE7mlmdENPkwQ4iDsP5RK1oTU19ujX/etiTg6ENXKTe4Do3SgaAce6lmM2OnvYXMf6QM3st1Rhxiv8wtOMsU=
----
-
 # SomeWhere 社区（直播弹幕多维度违规内容轻量化实时识别系统）
 
 虎扑式综合交流社区平台，以**自主训练的弹幕违规识别模型**为核心，对帖子全文 / 评论 / 弹幕 / 视频标题与描述 / 直播弹幕进行统一的多维度违规审核与处置。后端采用 FastAPI + SQLite + JWT（HS256），前端为原生 HTML/CSS/JS；识别模型为 `bert-base-chinese` 微调的六分类模型（自主训练，**不依赖第三方商用 AI 服务**），OCR 使用**自部署 RapidOCR**（`rapidocr_onnxruntime`），支持 ONNX int8 量化轻量部署（CPU 推理）。
